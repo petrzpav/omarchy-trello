@@ -1,0 +1,13 @@
+# Board opened first time (name or id); afterwards the last board you had open.
+default_board = ""
+
+# Seconds between checks of the open board for changes made elsewhere.
+poll = 60
+
+# Width of one list column.
+column_width = 32
+
+# Override any key, e.g.
+# [keys]
+# palette = "ctrl+p"
+# archive = "delete"

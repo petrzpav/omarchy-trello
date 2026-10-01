@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "id": "petrzpav.trello",
+  "name": "Trello",
+  "version": "0.1.0",
+  "author": "Pavel Petržela",
+  "license": "MIT",
+  "description": "Fast terminal Trello: arrow keys, Ctrl+P to any card, and a history that brings back deleted checklists, items, cards and comments.",
+  "kinds": ["bar-widget"],
+  "entryPoints": {
+    "barWidget": "Widget.qml"
+  },
+  "barWidget": {
+    "displayName": "Trello",
+    "description": "Your cards due within a day. Click to open Trello.",
+    "category": "Status",
+    "aliases": ["trello", "kanban", "tasks", "board"],
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": { "hideWhenNothingDue": true },
+    "schema": [
+      {
+        "key": "hideWhenNothingDue",
+        "type": "boolean",
+        "label": "Hide when nothing is due",
+        "description": "Only show the icon while some of your cards are due within a day.",
+        "defaultValue": true
+      }
+    ]
+  }
+}

@@ -1,0 +1,5 @@
+#!/bin/bash
+#
+# trello-window - open (or focus) the Trello client in its own terminal window.
+
+exec omarchy-launch-or-focus-tui --app-id=org.omarchy.trello "$(dirname "$(readlink -f "$0")")/trello"

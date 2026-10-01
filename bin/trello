@@ -1,0 +1,15 @@
+#!/bin/bash
+#
+# trello - fast terminal Trello with a history that remembers everything.
+#
+#   trello                      open the client
+#   trello auth                 store your Trello API key and token
+#   trello snapshot [--force]   record changed boards in the history (the timer runs this)
+#   trello due [--cached]       how many of your cards are due within a day
+#
+# Config lives in ~/.config/petrzpav-trello (config.toml, secrets).
+
+root=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
+export UV_PROJECT_ENVIRONMENT="${XDG_DATA_HOME:-$HOME/.local/share}/petrzpav-trello/venv"
+export PYTHONPATH="$root/lib${PYTHONPATH:+:$PYTHONPATH}"
+exec uv run --quiet --project "$root" python -m trellotui "$@"

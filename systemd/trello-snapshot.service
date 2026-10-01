@@ -1,0 +1,7 @@
+[Unit]
+Description=Record Trello board changes in the local history
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/trello snapshot
