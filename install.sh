@@ -23,11 +23,15 @@ link() {
   ln -sfn "$1" "$target"
 }
 
+units="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+
 if [[ ${1:-} == --remove ]]; then
-  systemctl --user disable --now trello-snapshot.timer >/dev/null 2>&1 || true
+  # Only units linked from this plugin: a foreign timer with the same name is left alone.
+  if mine_link "$units/trello-snapshot.timer"; then
+    systemctl --user disable --now trello-snapshot.timer >/dev/null 2>&1 || true
+  fi
   for unit in trello-snapshot.timer trello-snapshot.service; do
-    f="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$unit"
-    mine_link "$f" && rm -f "$f"
+    mine_link "$units/$unit" && rm -f "$units/$unit"
   done
   systemctl --user daemon-reload >/dev/null 2>&1 || true
   for f in "$bin/trello" "$bin/trello-window"; do
@@ -47,7 +51,13 @@ if [[ ! -e $conf ]]; then
   chmod 600 "$conf/secrets"
 fi
 
-systemctl --user link "$root/systemd/trello-snapshot.service" "$root/systemd/trello-snapshot.timer" >/dev/null
+for unit in trello-snapshot.service trello-snapshot.timer; do
+  if [[ -e $units/$unit || -L $units/$unit ]] && ! mine_link "$units/$unit"; then
+    echo "skipped $units/$unit: it already exists and isn't from this plugin"
+  else
+    systemctl --user link "$root/systemd/$unit" >/dev/null
+  fi
+done
 
 cat <<MSG
 Installed. Next:

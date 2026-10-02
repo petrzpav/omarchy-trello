@@ -10,10 +10,13 @@ import time
 import unicodedata
 from datetime import datetime, timedelta, timezone
 
+from rich.console import Group
 from rich.markdown import Markdown
+from rich.theme import Theme
 from rich.table import Table
 from rich.text import Text
 from textual import on
+from textual.actions import SkipAction
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import HorizontalScroll, Vertical
@@ -215,7 +218,7 @@ def inline_md(s: str, style="") -> Text:
         if m.group(1):
             t.append(m.group(1), "bold")
         elif m.group(2):
-            t.append(m.group(2), "cyan")
+            t.append(m.group(2), "bold cyan on black")   # as Markdown does: its own background stays readable on the highlight
         elif m.group(3):
             t.append(m.group(3), "italic")
         else:
@@ -223,6 +226,46 @@ def inline_md(s: str, style="") -> Text:
         pos = m.end()
     t.append(s[pos:])
     return t
+
+
+class Md:
+    """Markdown whose links are underlined in the surrounding color: Rich's blue ones vanish
+    on the blue highlight of a selected row."""
+    theme = Theme({"markdown.link": "underline", "markdown.link_url": "underline"})
+
+    def __init__(self, text: str):
+        self.md = Markdown(text)
+
+    def __rich_console__(self, console, options):
+        with console.use_theme(self.theme):
+            yield from console.render(self.md, options)
+
+
+def hanging(prefix: Text, body: Text) -> Table:
+    """`prefix` then `body`, with wrapped lines of the body indented under its first one."""
+    t = Table.grid()
+    t.add_column(width=prefix.cell_len, no_wrap=True)
+    t.add_column(overflow="fold")
+    t.add_row(prefix, body)
+    return t
+
+
+def set_rows(rows: OptionList, opts: list, keep: str | None, at: int):
+    """Replace the rows keeping the view where it was: the cursor goes back to row `keep`,
+    or, when that row is gone (deleted, ticked away), stays at height `at`."""
+    y = rows.scroll_y
+    rows.set_options(opts)          # jumps to the top and then to the cursor: keep the view instead
+    if not rows.option_count:
+        return
+    try:
+        rows.highlighted = rows.get_option_index(keep) if keep else 0
+    except Exception:  # noqa: BLE001 - OptionDoesNotExist
+        at = min(at, rows.option_count - 1)
+        while at > 0 and rows.get_option_at_index(at).disabled:
+            at -= 1
+        rows.highlighted = at
+    rows.scroll_to(y=y, animate=False, immediate=True)
+    rows.scroll_to_highlight()      # only if the cursor fell out of view
 
 
 def highlight(text: str, query: str, base="") -> Text:
@@ -403,6 +446,17 @@ class Column(Vertical):
         yield CardList(self.list_id)
 
 
+class Columns(HorizontalScroll):
+    """The lists side by side. ← → move between lists (BoardScreen), so they must not scroll
+    this container one cell when the lists are wider than the screen."""
+
+    def action_scroll_left(self):
+        raise SkipAction()
+
+    def action_scroll_right(self):
+        raise SkipAction()
+
+
 class BoardScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Static("", id="top")
@@ -410,7 +464,7 @@ class BoardScreen(Screen):
                     id="filter")
         inp.display = False
         yield inp
-        yield HorizontalScroll(id="cols")
+        yield Columns(id="cols")
         yield Footer()
 
     def on_mount(self):
@@ -425,7 +479,8 @@ class BoardScreen(Screen):
             (k["members"], "members", "Members", False), (k["due"], "due", "Due", False),
             (k["archive"], "archive", "Archive", True), (k["filter"], "filter", "Filter", True),
             (k["history"], "history", "History", True), (k["deleted"], "deleted", "Deleted", True),
-            (k["browser"], "browser", "Browser", False),
+            (k["browser"], "browser", "Browser", False), (k["copy_link"], "app.copy_link", "", False),
+            (k["actions"], "app.actions", "My actions", True),
         ]:
             self._bindings.bind(key, action, desc, show=show)
         self.refresh_bindings()
@@ -716,12 +771,14 @@ class BoardScreen(Screen):
 
 class CardScreen(Screen):
     """One card as a page: title, details, description, checklists, comments.
-    ↑↓ walk the rows; Enter edits the row; Space ticks an item."""
+    ↑↓ walk the rows; Enter edits the row; Space ticks an item; ←→ on a checklist heading
+    fold / unfold it."""
 
     def __init__(self, card_id: str):
         super().__init__()
         self.card_id = card_id
         self.obj = None
+        self.folded: set[str] = set()
 
     def compose(self) -> ComposeResult:
         with Vertical(id="page"):
@@ -733,12 +790,14 @@ class CardScreen(Screen):
         for key, action, desc, show in [
             ("escape", "back", "Back", True), ("space", "toggle", "Tick", True),
             ("shift+up", "shift_row(-1)", "", False), ("shift+down", "shift_row(1)", "", False),
+            ("left", "fold(True)", "", False), ("right", "fold(False)", "", False),
             (k["new"], "new_item", "New item", True), (k["new_checklist"], "new_checklist", "New checklist", False),
-            (k["rename"], "edit", "Edit", False), (k["comment"], "comment", "Comment", True),
+            (k["rename"], "edit", "Edit", False), (k["comment"], "comment", "Comment", False),
+            (k["hide_done"], "app.hide_done", "Hide done", True),
             (k["move"], "move", "Move", False), (k["labels"], "labels", "Labels", True),
             (k["members"], "members", "Members", False), (k["due"], "due", "Due", True),
             (k["archive"], "delete", "Delete", True), (k["history"], "history", "History", True),
-            (k["browser"], "browser", "Browser", False),
+            (k["browser"], "browser", "Browser", False), (k["copy_link"], "app.copy_link", "", False),
         ]:
             self._bindings.bind(key, action, desc, show=show, priority=key in ("space", "escape"))
         self.refresh_bindings()
@@ -763,6 +822,7 @@ class CardScreen(Screen):
             rows.set_options([Option(Text("This card is gone (deleted elsewhere?). Esc goes back.", style="dim"), id="gone")])
             return
         keep = rows.highlighted_option.id if rows.highlighted_option else None
+        at = rows.highlighted or 0
         for tmp, real in app.store.real.items():
             if keep and tmp in keep:
                 keep = keep.replace(tmp, real)
@@ -785,22 +845,30 @@ class CardScreen(Screen):
             meta.append("  " + ", ".join(names), style="cyan")
         opts += [Option(meta, id="meta"), None]
         desc = c.get("desc") or ""
-        opts.append(Option(Markdown(desc) if desc else Text("Add a description… (Enter)", style="dim italic"), id="desc"))
+        opts.append(Option(Md(desc) if desc else Text("Add a description… (Enter)", style="dim italic"), id="desc"))
+        hide = app.store.history.get("hide_done", False)
+        self._bindings.bind(app.keys["hide_done"], "app.hide_done", "Show done" if hide else "Hide done")
+        self.refresh_bindings()
         for cl in m.checklists(c["id"]):
             items = cl.get("checkItems", [])
             done = sum(i["state"] == "complete" for i in items)
-            head = Text.assemble(("\n" if True else "", ""), ("☰ " + cl["name"], "bold"),
+            folded = cl["id"] in self.folded
+            head = Text.assemble((cl["name"], "bold"),
                                  (f"  {done}/{len(items)}", "green" if items and done == len(items) else "dim"))
             if items:
                 w = 20
                 fill = round(w * done / len(items))
                 head.append("  " + "━" * fill, style="green")
                 head.append("━" * (w - fill), style="bright_black")
-            opts.append(Option(head, id=f"cl:{cl['id']}"))
-            for it in items:
+            shown = [] if folded else [i for i in items if not (hide and i["state"] == "complete")]
+            if hide and done and not folded:
+                head.append(f"  {done} done hidden", style="dim italic")
+            prefix = Text.assemble(("▸ " if folded else "▾ ", "dim"), ("☰ ", "bold"))
+            opts.append(Option(Group(Text(), hanging(prefix, head)), id=f"cl:{cl['id']}"))
+            for it in shown:
                 ok = it["state"] == "complete"
-                opts.append(Option(Text.assemble(("  ✔ " if ok else "  ☐ ", "green" if ok else ""),
-                                                 inline_md(it["name"], "dim strike" if ok else "")),
+                opts.append(Option(hanging(Text("  ✔ " if ok else "  ☐ ", style="green" if ok else ""),
+                                           inline_md(it["name"], "dim" if ok else "")),
                                    id=f"it:{cl['id']}:{it['id']}"))
         comments = m.card_comments(c["id"])
         if comments:
@@ -810,13 +878,9 @@ class CardScreen(Screen):
             when = short_date(parse_time(a.get("date")), True)
             body = Table.grid()
             body.add_row(Text.assemble((who, "cyan"), ("  " + when, "dim")))
-            body.add_row(Markdown(a["data"].get("text", "")))
+            body.add_row(Md(a["data"].get("text", "")))
             opts.append(Option(body, id=f"cm:{a['id']}"))
-        rows.set_options(opts)
-        try:
-            rows.highlighted = rows.get_option_index(keep) if keep else 0
-        except Exception:  # noqa: BLE001 - the row is gone
-            rows.highlighted = 0
+        set_rows(rows, opts, keep, at)
 
     def row(self) -> str:
         opt = self.query_one("#rows", OptionList).highlighted_option
@@ -857,6 +921,15 @@ class CardScreen(Screen):
             self.app.set_item(c, cl, it, state="incomplete" if it["state"] == "complete" else "complete")
         elif r == "meta" and c.get("due"):
             self.app.set_card(c, dueComplete=not c.get("dueComplete"))
+
+    def action_fold(self, fold: bool):
+        r = self.row()
+        if not r.startswith("cl:"):
+            return
+        cid = r[3:]
+        if fold != (cid in self.folded):
+            (self.folded.add if fold else self.folded.discard)(cid)
+            self.paint()
 
     def action_edit(self):
         app: TrelloApp = self.app
@@ -901,6 +974,7 @@ class CardScreen(Screen):
             i = ids.index(it["id"]) + 1 if it and it["id"] in ids else len(items)
             pos = between(items[i - 1]["pos"] if i > 0 else None, items[i]["pos"] if i < len(items) else None)
             new = app.new_item(c, cl, name.strip(), pos)
+            self.folded.discard(cl["id"])
             self.paint()
             rows = self.query_one("#rows", OptionList)
             rows.highlighted = rows.get_option_index(f"it:{cl['id']}:{new['id']}")
@@ -985,6 +1059,208 @@ class CardScreen(Screen):
     def action_browser(self):
         if self.card:
             self.app.open_url(self.card.get("shortUrl"))
+
+
+# ------------------------------------------------------------ my actions
+
+class ActionsScreen(Screen):
+    """My actions: the open cards with the actions label and me on them, from every board,
+    each with its next open checklist items. Space ticks one and the next one moves up;
+    ← → show fewer or more of a card's items; Enter opens the card."""
+
+    def __init__(self):
+        super().__init__()
+        self.filter_text = ""
+        self.expanded: set[str] = set()     # cards showing all their open items
+        self.folded: set[str] = set()       # cards showing none
+        self.rows_at: dict[str, tuple] = {}  # row id -> (model, card, checklist, item)
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="page"):
+            yield Static("", id="htitle")
+            inp = Input(placeholder="Filter: words in names, descriptions, checklists, comments…", id="afilter")
+            inp.display = False
+            yield inp
+            yield OptionList(id="rows")
+        yield Footer()
+
+    def on_mount(self):
+        k = self.app.keys
+        for key, action, desc, show in [
+            ("escape", "back", "Back", True), ("space", "tick", "Tick", True),
+            ("left", "fold(True)", "", False), ("right", "fold(False)", "", False),
+            (k["filter"], "filter", "Filter", True), (k["due"], "due", "Due", True),
+            (k["copy_link"], "app.copy_link", "Copy link", True), (k["browser"], "browser", "Browser", False),
+        ]:
+            self._bindings.bind(key, action, desc, show=show, priority=key == "escape")   # the filter takes spaces
+        self.refresh_bindings()
+        self.paint()
+        self.query_one("#rows").focus()
+
+    # -- what is on it
+
+    def member_id(self, m: Model) -> str | None:
+        want = self.app.cfg.actions_member.strip().casefold()
+        if not want:
+            return self.app.me_id
+        return next((mb["id"] for mb in m.members.values()
+                     if want in ((mb.get("username") or "").casefold(), (mb.get("fullName") or "").casefold(),
+                                 (mb.get("initials") or "").casefold())), None)
+
+    def cards(self) -> list[tuple[Model, dict, dict]]:
+        """(board, card, list) of every open card with the label and the member, due ones first."""
+        app: TrelloApp = self.app
+        label = app.cfg.actions_label.strip().casefold()
+        out = []
+        for b in app.store.cached_boards():
+            m = app.model_for(b["id"])
+            lids = {l["id"] for l in m.labels.values() if (l.get("name") or "").casefold() == label}
+            who = self.member_id(m)
+            if not lids or not who:
+                continue
+            lists = {l["id"]: l for l in m.open_lists()}
+            for c in m.b["cards"]:
+                if (not c.get("closed") and c["idList"] in lists and who in c.get("idMembers", [])
+                        and lids & set(c.get("idLabels", []))
+                        and (not self.filter_text or matches(m.haystack(c), self.filter_text))):
+                    out.append((m, c, lists[c["idList"]]))
+        due = sorted((x for x in out if x[1].get("due") and not x[1].get("dueComplete")), key=lambda x: x[1]["due"])
+        rest = sorted((x for x in out if x not in due), key=lambda x: x[1].get("dateLastActivity") or "", reverse=True)
+        return due + rest
+
+    def paint(self):
+        app: TrelloApp = self.app
+        rows = self.query_one("#rows", OptionList)
+        keep = rows.highlighted_option.id if rows.highlighted_option else None
+        at = rows.highlighted or 0
+        for tmp, real in app.store.real.items():
+            if keep and tmp in keep:
+                keep = keep.replace(tmp, real)
+        per = max(1, app.cfg.actions_items)
+        now = datetime.now().astimezone()
+        opts, self.rows_at, n_items = [], {}, 0
+        cards = self.cards()
+        for m, c, lst in cards:
+            todo = [(cl, it) for cl in m.checklists(c["id"]) for it in cl.get("checkItems", [])
+                    if it["state"] != "complete"]
+            n_items += len(todo)
+            cid = c["id"]
+            folded = cid in self.folded
+            head = Text.assemble((c["name"], "bold"), (f"  {m.b.get('name', '')} › {lst['name']}", "dim"))
+            due = parse_time(c.get("due"))
+            if due and not c.get("dueComplete"):
+                head.append(f"  󰃭 {short_date(due, True)}",
+                            style="bold red" if due < now else "yellow" if due < now + timedelta(days=1) else "")
+            head.append(f"  {len(todo)} open" if todo else "  nothing open", style="dim")
+            prefix = Text("▸ " if folded else "▾ ", style="dim")
+            opts.append(Option(Group(Text(), hanging(prefix, head)), id=f"c:{cid}"))
+            self.rows_at[f"c:{cid}"] = (m, c, None, None)
+            if folded:
+                continue
+            shown = todo if cid in self.expanded else todo[:per]
+            many = len({cl["id"] for cl, _ in todo}) > 1
+            for cl, it in shown:
+                body = inline_md(it["name"])
+                if many:
+                    body.append(f"  · {cl['name']}", style="dim")
+                rid = f"i:{cid}:{it['id']}"
+                opts.append(Option(hanging(Text("    ☐ "), body), id=rid))
+                self.rows_at[rid] = (m, c, cl, it)
+            if len(todo) > len(shown):
+                opts.append(Option(Text(f"      … {len(todo) - len(shown)} more  →", style="dim"), id=f"m:{cid}"))
+                self.rows_at[f"m:{cid}"] = (m, c, None, None)
+        if not cards:
+            who = app.cfg.actions_member or "you"
+            opts.append(Option(Text(f"No open card with the “{app.cfg.actions_label}” label and {who} on it"
+                                    + (" matches the filter" if self.filter_text else ""), style="dim"),
+                               id="none", disabled=True))
+        filt = f"   [b]filter:[/] {self.filter_text}" if self.filter_text else ""
+        self.query_one("#htitle", Static).update(
+            f"My actions  [dim]{len(cards)} cards · {n_items} open items · label “{app.cfg.actions_label}”[/]{filt}")
+        set_rows(rows, opts, keep, at)
+
+    def row(self) -> str:
+        opt = self.query_one("#rows", OptionList).highlighted_option
+        return opt.id if opt else ""
+
+    def at(self) -> tuple:
+        """(model, card, checklist, item) under the cursor."""
+        return self.rows_at.get(self.row(), (None, None, None, None))
+
+    def card_row(self, cid: str):
+        rows = self.query_one("#rows", OptionList)
+        rows.highlighted = rows.get_option_index(f"c:{cid}")
+
+    # -- keys
+
+    @on(OptionList.OptionSelected)
+    def selected(self, ev: OptionList.OptionSelected):
+        _, c, _, _ = self.at()
+        if not c:
+            return
+        if ev.option.id.startswith("m:"):
+            return self.action_fold(False)
+        self.app.open_card_anywhere(c)
+
+    def action_back(self):
+        inp = self.query_one("#afilter", Input)
+        if inp.display:
+            inp.display = False
+            self.query_one("#rows").focus()
+            if self.filter_text:
+                self.filter_text = ""
+                inp.value = ""
+                self.paint()
+            return
+        self.app.pop_screen()
+
+    def action_tick(self):
+        _, c, cl, it = self.at()
+        if it:
+            self.app.set_item(c, cl, it, state="complete")
+            self.app.notify(f"Ticked “{it['name'][:60]}” · {pretty(self.app.keys['undo'])} undoes it", timeout=3)
+
+    def action_fold(self, fold: bool):
+        _, c, _, _ = self.at()
+        if not c:
+            return
+        cid = c["id"]
+        if fold:                      # all items -> the first few -> none
+            if cid in self.expanded:
+                self.expanded.discard(cid)
+            else:
+                self.folded.add(cid)
+        elif cid in self.folded:      # none -> the first few -> all
+            self.folded.discard(cid)
+        else:
+            self.expanded.add(cid)
+        self.paint()
+        if fold or self.row().startswith("m:"):
+            self.card_row(cid)
+
+    def action_filter(self):
+        inp = self.query_one("#afilter", Input)
+        inp.display = True
+        inp.focus()
+
+    @on(Input.Changed, "#afilter")
+    def filter_changed(self, ev: Input.Changed):
+        self.filter_text = ev.value.strip()
+        self.paint()
+
+    @on(Input.Submitted, "#afilter")
+    def filter_done(self):
+        self.query_one("#rows").focus()
+
+    def action_due(self):
+        _, c, _, _ = self.at()
+        if c:
+            self.app.due_dialog(c)
+
+    def action_browser(self):
+        _, c, _, _ = self.at()
+        if c:
+            self.app.open_url(c.get("shortUrl"))
 
 
 # ------------------------------------------------------------ history
@@ -1180,7 +1456,7 @@ class EventDetail(ModalScreen):
                 if v.kind == "item":
                     body = ("✔ " if data.get("state") == "complete" else "☐ ") + body
                 yield Static(f"\n[b]{label}[/]")
-                yield Static(Markdown(body) if v.kind in ("card", "comment") else Text(body), classes="snippet")
+                yield Static(Md(body) if v.kind in ("card", "comment") else Text(body), classes="snippet")
             if v.data is None:
                 action = "Enter restores it" + (f" (with its {v.folded} items)" if getattr(v, "folded", 0) else "")
             elif v.prev is None:
@@ -1200,7 +1476,8 @@ class TrelloApp(App):
     #cols { height: 1fr; background: ansi_default; border-top: solid $panel-lighten-2; }
     .col { width: COLW; height: 1fr; border-right: vkey $panel-lighten-2; padding: 0 0 0 1; }
     .coltitle { height: 1; padding: 0 1; margin-bottom: 1; }
-    CardList { height: 1fr; border: none; background: ansi_default; padding: 0; scrollbar-size-vertical: 1; }
+    CardList { height: 1fr; border: none; background: ansi_default; padding: 0; scrollbar-size-vertical: 1;
+               overflow-x: hidden; }
     CardList:focus { border: none; }
     CardList > .option-list--option { padding: 0 1; }
     CardList > .option-list--option-highlighted { background: ansi_default; text-style: none; }
@@ -1208,7 +1485,8 @@ class TrelloApp(App):
     CardList:focus { border-left: none; }
     CardList > .option-list--separator { color: ansi_default; }
     #page { width: 100%; max-width: 100; height: 1fr; padding: 1 2 0 2; }
-    CardScreen, HistoryScreen { align-horizontal: center; }
+    CardScreen, HistoryScreen, ActionsScreen { align-horizontal: center; }
+    #afilter { height: 3; border: round $accent; background: ansi_default; margin: 0 1 1 1; }
     #rows, #events { height: 1fr; border: none; background: ansi_default; scrollbar-size-vertical: 1; }
     #rows > .option-list--option, #events > .option-list--option { padding: 0 1; }
     #rows:focus > .option-list--option-highlighted, #events:focus > .option-list--option-highlighted {
@@ -1236,13 +1514,14 @@ class TrelloApp(App):
         super().__init__()
         self.cfg, self.keys = cfg, cfg.keys
         self.store = store or Store(cfg, self.call_from_thread)
-        self.model = Model(None, None)
+        self.models: dict[str, Model] = {"": Model(None, None)}     # every board touched, by id
+        self.board_id = ""                                         # the one on screen
         self.undo_stack: list[tuple[str, callable]] = []
-        self.syncing = False
+        self.syncing: set[str] = set()
         self.error = ""
         self.last_sync = 0.0
         self.last_full: dict[str, float] = {}
-        self._sync_timer = None
+        self._sync_timers: dict[str, object] = {}
         self.me_id = (self.store.history.get("me") or {}).get("id", "")
 
     def on_mount(self):
@@ -1251,7 +1530,7 @@ class TrelloApp(App):
         for key, action, desc, show in [
             (k["palette"], "palette", "Go to", True), (k["boards"], "boards", "Boards", True),
             (k["undo"], "undo", "Undo", True), (k["refresh"], "refresh", "Refresh", False),
-            (k["help"], "help", "Help", True),
+            (k["help"], "help", "Help", True), (k["actions"], "actions", "", False),
         ]:
             self._bindings.bind(key, action, desc, show=show, priority=True)
         self.push_screen(BoardScreen())
@@ -1264,15 +1543,31 @@ class TrelloApp(App):
         elif boards:
             self.call_after_refresh(self.action_boards)
         self.store.submit("bg", self.store.me, lambda me: setattr(self, "me_id", me["id"]), self.fail(""))
-        self.store.submit("bg", self.store.fetch_boards, self.boards_fetched, self.fail("Boards: "))
+        self.refresh_boards()
         self.set_interval(self.cfg.poll, self.poll)
 
     # -- helpers
 
+    @property
+    def model(self) -> Model:
+        """The board on screen."""
+        return self.models[self.board_id]
+
+    def model_for(self, bid: str) -> Model:
+        """Any board, in memory: the cached copy the first time, then kept fresh by syncs."""
+        if bid not in self.models:
+            board, comments = self.store.cached_board(bid)
+            self.models[bid] = Model(board or {"id": bid, "name": "…", "lists": [], "cards": [], "checklists": [],
+                                               "labels": [], "members": []}, comments)
+        return self.models[bid]
+
+    def board_of(self, c: dict) -> str:
+        """The board a card lives on (cards from My actions are not all on the open board)."""
+        return c.get("idBoard") or self.board_id
+
     def fail(self, prefix=""):
         def report(e):
             self.error = str(e)
-            self.syncing = False
             self.notify(f"{prefix}{e}", severity="error", timeout=8)
             self.repaint()
         return report
@@ -1281,7 +1576,7 @@ class TrelloApp(App):
         bits = []
         if self.store.inflight:
             bits.append(f"↑ {self.store.inflight}")
-        if self.syncing:
+        if self.board_id in self.syncing:
             bits.append("↻")
         elif self.last_sync:
             bits.append(datetime.fromtimestamp(self.last_sync).strftime("synced %H:%M"))
@@ -1294,18 +1589,21 @@ class TrelloApp(App):
             if hasattr(s, "paint") and s.is_mounted:
                 s.paint()
 
-    def write(self, fn, label=""):
-        """Send a change to Trello on the action lane; the screen already shows it."""
+    def write(self, fn, label="", bid=None):
+        """Send a change to board `bid` (the open one by default) on the action lane; the
+        screen already shows it."""
+        bid = bid or self.board_id
+
         def done(_):
             self.error = ""
             self.swap_ids()
             self.repaint()
-            self.schedule_sync(SYNC_AFTER_WRITE)
+            self.schedule_sync(SYNC_AFTER_WRITE, bid)
             self.repaint_top()
 
         def error(e):
             self.notify(f"{label or 'Change'} failed: {e}", severity="error", timeout=8)
-            self.schedule_sync(0.5)
+            self.schedule_sync(0.5, bid)
         self.store.submit("fg", fn, done, error)
         self.repaint_top()
 
@@ -1325,23 +1623,23 @@ class TrelloApp(App):
         real = self.store.real
         if not real:
             return
-        m = self.model
         sw = lambda x: real.get(x, x)      # noqa: E731
-        items = [i for cl in m.b["checklists"] for i in cl.get("checkItems", [])]
-        for o in m.b["lists"] + m.b["cards"] + m.b["checklists"] + items + m.comments:
-            o["id"] = sw(o["id"])
-        for c in m.b["cards"]:
-            c["idList"] = sw(c["idList"])
-        for cl in m.b["checklists"]:
-            cl["idCard"] = sw(cl["idCard"])
-        for a in m.comments:
-            a["data"]["card"]["id"] = sw(a["data"]["card"]["id"])
+        for m in self.models.values():
+            items = [i for cl in m.b["checklists"] for i in cl.get("checkItems", [])]
+            for o in m.b["lists"] + m.b["cards"] + m.b["checklists"] + items + m.comments:
+                o["id"] = sw(o["id"])
+            for c in m.b["cards"]:
+                c["idList"] = sw(c["idList"])
+            for cl in m.b["checklists"]:
+                cl["idCard"] = sw(cl["idCard"])
+            for a in m.comments:
+                a["data"]["card"]["id"] = sw(a["data"]["card"]["id"])
+            m.reindex()
         for s in self.screen_stack:
             if isinstance(s, BoardScreen):
                 s.cur_list, s.cur_card = sw(s.cur_list), sw(s.cur_card)
             elif isinstance(s, CardScreen):
                 s.card_id = sw(s.card_id)
-        m.reindex()
 
     def push_undo(self, label: str, fn):
         self.undo_stack.append((label, fn))
@@ -1352,17 +1650,50 @@ class TrelloApp(App):
             subprocess.Popen(["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                              start_new_session=True)
 
+    def action_actions(self):
+        if isinstance(self.screen, ModalScreen):
+            return
+        if isinstance(self.screen, ActionsScreen):
+            return self.pop_screen()
+        for s in self.screen_stack:
+            if isinstance(s, ActionsScreen):
+                while self.screen is not s:
+                    self.pop_screen()
+                return
+        self.push_screen(ActionsScreen())
+        self.refresh_boards()
+
+    def open_card_anywhere(self, c: dict):
+        """Open a card from any board: its board goes on screen under whatever is on top."""
+        bid = self.board_of(c)
+        if bid != self.board_id:
+            self.open_board(bid, keep_screens=True)
+        self.open_card(c["id"])
+
+    def action_copy_link(self):
+        """The card's link (or the board's, with no card under the cursor) to the clipboard."""
+        c = self.current_card()
+        url, what = (c.get("shortUrl"), f"“{c['name']}”") if c else (self.model.b.get("shortUrl"), "the board")
+        if not url:
+            return self.notify(f"No link for {what} yet", severity="warning")
+        try:
+            subprocess.run(["wl-copy", "--", url], check=True, timeout=5,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except (OSError, subprocess.SubprocessError):
+            self.copy_to_clipboard(url)          # OSC 52: the terminal puts it on the clipboard
+        self.notify(f"Copied the link to {what}\n{url}", timeout=3)
+
     # -- boards and syncing
 
-    def open_board(self, bid: str):
-        board, comments = self.store.cached_board(bid)
-        self.model = Model(board or {"id": bid, "name": "…", "lists": [], "cards": [], "checklists": [],
-                                     "labels": [], "members": []}, comments)
+    def open_board(self, bid: str, keep_screens=False):
+        """Put board `bid` on screen. `keep_screens` leaves what is on top of the board (My actions
+        opening one of its cards)."""
+        self.model_for(bid)
+        self.board_id = bid
         self.store.history.put("last_board", bid)
-        self.undo_stack.clear()
-        while len(self.screen_stack) > 2:
+        while not keep_screens and len(self.screen_stack) > 2:
             self.pop_screen()
-        bs = self.screen_stack[-1]
+        bs = self.screen_stack[1] if len(self.screen_stack) > 1 else None
         if isinstance(bs, BoardScreen) and bs.is_mounted:
             bs.cur_list = bs.cur_card = None
             bs.filter_text = ""
@@ -1375,25 +1706,36 @@ class TrelloApp(App):
         self.repaint_top()
         if not self.model.id and not isinstance(self.screen, Picker):
             self.action_boards()
-        # Fill the local copy of every other board in the background so Ctrl+P finds any card.
+        # Fill the local copy of every other board in the background so Ctrl+P (and My actions)
+        # find any card.
         for b in boards:
-            if b["id"] != self.model.id and self.store.history.get(f"seen:{b['id']}") != b.get("dateLastActivity"):
-                self.store.submit("bg", lambda bid=b["id"]: self.store.fetch_board(bid, check_writes=False))
+            bid = b["id"]
+            if bid != self.board_id and bid not in self.syncing \
+                    and self.store.history.get(f"seen:{bid}") != b.get("dateLastActivity"):
+                self.sync(bid=bid)
 
-    def schedule_sync(self, delay: float):
-        if self._sync_timer:
-            self._sync_timer.stop()
-        self._sync_timer = self.set_timer(max(delay, 0.05), lambda: self.sync(full=True))
+    def refresh_boards(self):
+        """Ask Trello which boards changed; the changed ones are fetched (boards_fetched)."""
+        self.store.submit("bg", self.store.fetch_boards, self.boards_fetched, self.fail("Boards: "))
+
+    def schedule_sync(self, delay: float, bid: str | None = None):
+        bid = bid or self.board_id
+        if self._sync_timers.get(bid):
+            self._sync_timers[bid].stop()
+        self._sync_timers[bid] = self.set_timer(max(delay, 0.05), lambda: self.sync(full=True, bid=bid))
 
     def poll(self):
         if not self.syncing and not self.store.inflight:
             self.sync(full=False)
+            if any(isinstance(s, ActionsScreen) for s in self.screen_stack):
+                self.refresh_boards()
 
-    def sync(self, full=True):
-        bid = self.model.id
-        if not bid or self.syncing:
+    def sync(self, full=True, bid: str | None = None):
+        """Re-read board `bid` (the open one by default) and put it in place of the copy in memory."""
+        bid = bid or self.board_id
+        if not bid or bid in self.syncing:
             return
-        self.syncing = True
+        self.syncing.add(bid)
         self.repaint_top()
         need_full = full or time.time() - self.last_full.get(bid, 0) > FULL_SYNC
         api, hist = self.store.api, self.store.history
@@ -1406,22 +1748,28 @@ class TrelloApp(App):
             return self.store.fetch_board(bid)
 
         def done(res):
-            self.syncing = False
+            self.syncing.discard(bid)
             self.error = ""
-            self.last_sync = time.time()
+            if bid == self.board_id:
+                self.last_sync = time.time()
             if res is None:                     # a write landed meanwhile: look again shortly
-                self.schedule_sync(1.5)
-            elif res != "same" and bid == self.model.id:
+                self.schedule_sync(1.5, bid)
+            elif res != "same":
                 self.last_full[bid] = time.time()
-                self.model = Model(*res)
-                self.repaint()
-                return
+                if bid == self.board_id or bid in self.models:
+                    self.models[bid] = Model(*res)
+                    self.repaint()
+                    return
             self.repaint_top()
-        self.store.submit("bg", job, done, self.fail("Sync: "))
+
+        def error(e):
+            self.syncing.discard(bid)
+            self.fail("Sync: ")(e)
+        self.store.submit("bg", job, done, error)
 
     def action_refresh(self):
         self.sync(full=True)
-        self.store.submit("bg", self.store.fetch_boards, self.boards_fetched, self.fail("Boards: "))
+        self.refresh_boards()
 
     # -- go to anything
 
@@ -1435,7 +1783,7 @@ class TrelloApp(App):
         items = []
         names = {b["id"]: b["name"] for b in self.store.cached_boards()}
         for bid in names:
-            board = self.model.b if bid == self.model.id else self.store.history.get(f"board:{bid}")
+            board = self.models[bid].b if bid in self.models else self.store.history.get(f"board:{bid}")
             if not board:
                 continue
             lists = {l["id"]: l for l in board["lists"]}
@@ -1453,10 +1801,16 @@ class TrelloApp(App):
             ("Archive list", "archive_list"), ("Move list left", "move_list(-1)"), ("Move list right", "move_list(1)"),
             ("Filter cards", "filter"), ("Board history", "history"), ("Recently deleted (restore)", "deleted"),
             ("Show archived cards", "archived"), ("Switch board", "boards"), ("Refresh", "refresh"),
-            ("Open in browser", "browser"), ("Delete card permanently", "delete_card"), ("Undo", "undo"),
-            ("Keys", "help"),
+            ("Open in browser", "browser"), ("Copy link", "copy_link"), ("Delete card permanently", "delete_card"), ("Undo", "undo"),
+            ("My actions", "actions"), ("Hide / show completed items", "hide_done"), ("Keys", "help"),
         ]
         return [{"text": n, "kind": "cmd", "id": a, "prefix": Text("> ", style="dim")} for n, a in cmds]
+
+    def action_hide_done(self):
+        hide = not self.store.history.get("hide_done", False)
+        self.store.history.put("hide_done", hide)
+        self.repaint()
+        self.notify("Completed items hidden" if hide else "Completed items shown", timeout=2)
 
     def action_palette(self):
         cache = {}
@@ -1503,6 +1857,8 @@ class TrelloApp(App):
             return scr.card
         if isinstance(scr, BoardScreen):
             return scr.cur()[1]
+        if isinstance(scr, ActionsScreen):
+            return scr.at()[1]
         return None
 
     def action_boards(self):
@@ -1520,6 +1876,8 @@ class TrelloApp(App):
             (f"{k['new']}  ·  {k['new_checklist']}", "new card (in a card: new checklist item) · new checklist"),
             (f"{k['rename']} / Enter", "rename / edit what's under the cursor"),
             ("Space", "in a card: tick an item (on the details row: due done)"),
+            ("← / →", "in a card, on a checklist heading: fold / unfold it"),
+            (f"{k['hide_done']}", "hide / show completed checklist items"),
             (f"{k['move']}  ·  {k['labels']}  ·  {k['members']}  ·  {k['due']}", "move to list · labels · members · due date"),
             (f"{k['comment']}", "comment"),
             (f"{k['archive']}", "archive card · in a card: delete item / checklist / comment"),
@@ -1527,6 +1885,8 @@ class TrelloApp(App):
             (f"{k['history']}", "history of the card / the board: every change, with restore"),
             (f"{k['deleted']}", "recently deleted: cards, checklists, items, comments → restore"),
             (f"{k['browser']}", "open in the browser"),
+            (f"{k['copy_link']}", "copy the link of the card (or the board)"),
+            (f"{k['actions']}", "my actions: “action” cards I'm on, from every board, with their next items"),
             (f"{k['refresh']}  ·  {k['help']}  ·  Ctrl+Q", "refresh · this help · quit"),
         ]))
 
@@ -1543,9 +1903,9 @@ class TrelloApp(App):
         old = {k: c.get(k) for k in fields}
         c.update(fields)
         self.repaint()
-        bid = self.model.id
+        bid = self.board_of(c)
         self.write(lambda: self.store.rec("card", self.store.api.update_card(self.R(c), **fields), bid, self.R(c)),
-                   "Saving the card")
+                   "Saving the card", bid)
         if undo:
             self.push_undo(undo_label or f"changed “{c['name']}”", lambda: self.set_card(c, undo=False, **old))
 
@@ -1573,8 +1933,8 @@ class TrelloApp(App):
         def go(yes):
             if not yes:
                 return
-            m = self.model
-            bid = m.id
+            bid = self.board_of(c)
+            m = self.model_for(bid)
             gone = [("card", self.R(c), bid, self.R(c))]
             for cl in m.checklists(c["id"]):
                 gone.append(("checklist", self.R(cl), bid, self.R(c)))
@@ -1591,7 +1951,7 @@ class TrelloApp(App):
             def job():
                 self.store.api.delete_card(self.R(c))
                 self.store.history.observe_deleted([(k, self.store.real.get(o, o), b, self.store.real.get(x, x)) for k, o, b, x in gone])
-            self.write(job, "Deleting the card")
+            self.write(job, "Deleting the card", bid)
             self.push_undo(f"deleted “{c['name']}”", lambda: self.restore(
                 Version(0, "card", self.R(c), bid, self.R(c), when, "app", None,
                         prev=self.store.history.last_data("card", self.R(c))), None))
@@ -1689,12 +2049,12 @@ class TrelloApp(App):
         if "pos" in fields:
             cl["checkItems"].sort(key=lambda i: i.get("pos") or 0)
         self.repaint()
-        bid = self.model.id
+        bid = self.board_of(c)
 
         def job():
             new = self.store.api.update_item(self.R(c), self.R(it), **fields)
             self.store.rec("item", {**new, "idChecklist": self.R(cl)}, bid, self.R(c))
-        self.write(job, "Saving the item")
+        self.write(job, "Saving the item", bid)
         if undo:
             self.push_undo(f"item “{it['name']}”", lambda: self.set_item(c, cl, it, undo=False, **old))
 
@@ -1702,13 +2062,13 @@ class TrelloApp(App):
         it = {"id": tmp_id(), "name": name, "state": "incomplete", "pos": pos}
         cl.setdefault("checkItems", []).append(it)
         cl["checkItems"].sort(key=lambda i: i.get("pos") or 0)
-        bid = self.model.id
+        bid = self.board_of(c)
 
         def job():
             new = self.store.api.add_item(self.R(cl), name, pos=pos)
             self.store.real[it["id"]] = new["id"]
             self.store.rec("item", {**new, "idChecklist": self.R(cl)}, bid, self.R(c))
-        self.write(job, "Adding the item")
+        self.write(job, "Adding the item", bid)
         self.push_undo(f"added “{name}”", lambda: self.delete_item(c, cl, it, undo=False))
         return it
 
@@ -1716,12 +2076,12 @@ class TrelloApp(App):
         if it in cl.get("checkItems", []):
             cl["checkItems"].remove(it)
         self.repaint()
-        bid = self.model.id
+        bid = self.board_of(c)
 
         def job():
             self.store.api.delete_item(self.R(cl), self.R(it))
             self.store.history.observe_deleted([("item", self.R(it), bid, self.R(c))])
-        self.write(job, "Deleting the item")
+        self.write(job, "Deleting the item", bid)
         if undo:
             data = {"name": it["name"], "state": it["state"], "pos": it["pos"], "idChecklist": self.R(cl)}
             self.push_undo(f"deleted “{it['name']}”", lambda: self.new_item_back(c, cl, data))
@@ -1733,7 +2093,7 @@ class TrelloApp(App):
             self.set_item(c, cl, it, undo=False, state="complete")
 
     def new_checklist(self, c, name) -> dict:
-        m = self.model
+        m = self.model_for(self.board_of(c))
         cls = m.checklists(c["id"])
         cl = {"id": tmp_id(), "name": name, "idCard": c["id"], "checkItems": [],
               "pos": (cls[-1]["pos"] + 65536) if cls else 65536}
@@ -1745,7 +2105,7 @@ class TrelloApp(App):
             new = self.store.api.create_checklist(self.R(c), name, pos=cl["pos"])
             self.store.real[cl["id"]] = new["id"]
             self.store.rec("checklist", new, bid, self.R(c))
-        self.write(job, "Adding the checklist")
+        self.write(job, "Adding the checklist", bid)
         self.push_undo(f"added checklist “{name}”", lambda: self.delete_checklist(c, cl, undo=False))
         return cl
 
@@ -1753,14 +2113,14 @@ class TrelloApp(App):
         old = cl["name"]
         cl["name"] = name
         self.repaint()
-        bid = self.model.id
+        bid = self.board_of(c)
         self.write(lambda: self.store.rec("checklist", self.store.api.update_checklist(self.R(cl), name=name),
-                                          bid, self.R(c)), "Renaming the checklist")
+                                          bid, self.R(c)), "Renaming the checklist", bid)
         if undo:
             self.push_undo("renamed checklist", lambda: self.rename_checklist(c, cl, old, undo=False))
 
     def delete_checklist(self, c, cl, undo=True):
-        m = self.model
+        m = self.model_for(self.board_of(c))
         if cl in m.b["checklists"]:
             m.b["checklists"].remove(cl)
         m.reindex()
@@ -1772,7 +2132,7 @@ class TrelloApp(App):
         def job():
             self.store.api.delete_checklist(self.R(cl))
             self.store.history.observe_deleted([(k, self.store.real.get(o, o), b, self.store.real.get(x, x)) for k, o, b, x in gone])
-        self.write(job, "Deleting the checklist")
+        self.write(job, "Deleting the checklist", bid)
         if undo:
             n = len(cl.get("checkItems", []))
             self.notify(f"Deleted checklist “{cl['name']}” ({n} items) · {pretty(self.keys['undo'])} brings it back")
@@ -1786,40 +2146,42 @@ class TrelloApp(App):
         me = self.store.history.get("me") or {}
         a = {"id": tmp_id(), "idMemberCreator": self.me_id, "date": datetime.now(timezone.utc).isoformat(),
              "data": {"text": text, "card": {"id": c["id"]}}, "memberCreator": {"fullName": me.get("fullName", "me")}}
-        self.model.comments.insert(0, a)
-        self.model.reindex()
+        bid = self.board_of(c)
+        m = self.model_for(bid)
+        m.comments.insert(0, a)
+        m.reindex()
         self.repaint()
-        bid = self.model.id
 
         def job():
             new = self.store.api.add_comment(self.R(c), text)
             self.store.real[a["id"]] = new["id"]
             self.store.rec("comment", new, bid, self.R(c))
-        self.write(job, "Commenting")
+        self.write(job, "Commenting", bid)
         self.push_undo("comment", lambda: self.delete_comment(c, a, undo=False))
 
     def edit_comment(self, c, a, text):
         old = a["data"]["text"]
         a["data"]["text"] = text
         self.repaint()
-        bid = self.model.id
+        bid = self.board_of(c)
 
         def job():
             self.store.api.update_comment(self.R(a), text)
             self.store.rec("comment", a, bid, self.R(c))
-        self.write(job, "Saving the comment")
+        self.write(job, "Saving the comment", bid)
         self.push_undo("comment", lambda: self.edit_comment(c, a, old))
 
     def delete_comment(self, c, a, undo=True):
-        self.model.comments.remove(a)
-        self.model.reindex()
+        bid = self.board_of(c)
+        m = self.model_for(bid)
+        m.comments.remove(a)
+        m.reindex()
         self.repaint()
-        bid = self.model.id
 
         def job():
             self.store.api.delete_comment(self.R(a))
             self.store.history.observe_deleted([("comment", self.R(a), bid, self.R(c))])
-        self.write(job, "Deleting the comment")
+        self.write(job, "Deleting the comment", bid)
         if undo:
             self.push_undo("deleted comment", lambda: self.add_comment(c, a["data"]["text"]) or self.undo_stack.pop())
 
@@ -1935,7 +2297,7 @@ class TrelloApp(App):
         self.show_deleted()
 
     def restore(self, v: Version, screen):
-        board = self.model.b
+        board = self.model_for(v.board).b if v.board else self.model.b
 
         def done(msg):
             self.notify(msg)

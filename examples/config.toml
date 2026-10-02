@@ -7,6 +7,13 @@ poll = 60
 # Width of one list column.
 column_width = 32
 
+# My actions (Alt+A): open cards with this label and this member on them, from every
+# board, each with its next few open checklist items. The member is a username, full
+# name or initials; empty means you.
+actions_label = "action"
+actions_member = ""
+actions_items = 3
+
 # Override any key, e.g.
 # [keys]
 # palette = "ctrl+p"

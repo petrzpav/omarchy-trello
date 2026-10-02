@@ -27,6 +27,9 @@ DEFAULT_KEYS = {
     "history": "alt+h",
     "deleted": "alt+r",
     "browser": "alt+o",
+    "copy_link": "alt+y",
+    "actions": "alt+a",
+    "hide_done": "alt+c",
     "refresh": "f5",
     "help": "f1",
     "save": "ctrl+s",
@@ -38,6 +41,9 @@ class Config:
     default_board: str = ""
     poll: int = 60                # seconds between syncs of the open board
     column_width: int = 32
+    actions_label: str = "action"   # My actions: open cards with this label…
+    actions_member: str = ""        # …and this member on them (username, full name or initials; empty = me)
+    actions_items: int = 3          # open checklist items shown per card before "… more"
     keys: dict[str, str] = field(default_factory=dict)
     secrets: dict[str, str] = field(default_factory=dict)
 
@@ -70,6 +76,9 @@ def load() -> Config:
         default_board=raw.get("default_board", ""),
         poll=int(raw.get("poll", 60)),
         column_width=int(raw.get("column_width", 32)),
+        actions_label=str(raw.get("actions_label", "action")),
+        actions_member=str(raw.get("actions_member", "")),
+        actions_items=int(raw.get("actions_items", 3)),
         keys={**DEFAULT_KEYS, **raw.get("keys", {})},
         secrets=read_secrets(CONFIG_DIR / "secrets"),
     )
