@@ -19,6 +19,7 @@ from textual import on
 from textual.actions import SkipAction
 from textual.app import App, ComposeResult
 from textual.binding import Binding
+from textual.markup import escape
 from textual.containers import HorizontalScroll, Vertical
 from textual.screen import ModalScreen, Screen
 from textual.widgets import Footer, Input, OptionList, Static, TextArea
@@ -528,8 +529,8 @@ class BoardScreen(Screen):
         app: TrelloApp = self.app
         m = app.model
         status = app.status_text()
-        filt = f"   [b]filter:[/] {self.filter_text}" if self.filter_text else ""
-        self.query_one("#top", Static).update(f" [b]{m.b.get('name', '')}[/]{filt}   [dim]{status}[/]")
+        filt = f"   [b]filter:[/] {escape(self.filter_text)}" if self.filter_text else ""
+        self.query_one("#top", Static).update(f" [b]{escape(m.b.get('name', ''))}[/]{filt}   [dim]{status}[/]")
         lists = m.open_lists()
         cols = self.query_one("#cols", HorizontalScroll)
         ids = [l["id"] for l in lists]
@@ -682,7 +683,7 @@ class BoardScreen(Screen):
             self.cur_list, self.cur_card = lst, new["id"]
             self.paint()
             self.action_new_card()          # keep adding; Esc stops
-        app.push_screen(Prompt(f"New card in {app.model.lists[lst]['name']}",
+        app.push_screen(Prompt(f"New card in {escape(app.model.lists[lst]['name'])}",
                                note="Enter adds it and asks for the next one · Esc stops"), add)
 
     def action_rename(self):
@@ -943,7 +944,7 @@ class CardScreen(Screen):
         elif r == "meta":
             app.due_dialog(c)
         elif r == "desc":
-            app.push_screen(Editor(f"Description · {c['name']}", c.get("desc") or "", app.keys["save"]),
+            app.push_screen(Editor(f"Description · {escape(c['name'])}", c.get("desc") or "", app.keys["save"]),
                             lambda t: t is not None and t != c.get("desc") and app.set_card(c, desc=t))
         elif it:
             app.push_screen(Prompt("Item", it["name"]),
@@ -979,7 +980,7 @@ class CardScreen(Screen):
             rows = self.query_one("#rows", OptionList)
             rows.highlighted = rows.get_option_index(f"it:{cl['id']}:{new['id']}")
             self.action_new_item()
-        app.push_screen(Prompt(f"New item in {cl['name']}", note="Enter adds it and asks for the next one · Esc stops"), add)
+        app.push_screen(Prompt(f"New item in {escape(cl['name'])}", note="Enter adds it and asks for the next one · Esc stops"), add)
 
     def action_new_checklist(self):
         c = self.card
@@ -1034,7 +1035,7 @@ class CardScreen(Screen):
     def action_comment(self):
         c = self.card
         if c:
-            self.app.push_screen(Editor(f"Comment · {c['name']}", "", self.app.keys["save"]),
+            self.app.push_screen(Editor(f"Comment · {escape(c['name'])}", "", self.app.keys["save"]),
                                  lambda t: t and t.strip() and self.app.add_comment(c, t.strip()))
 
     def action_move(self):
@@ -1174,9 +1175,9 @@ class ActionsScreen(Screen):
             opts.append(Option(Text(f"No open card with the “{app.cfg.actions_label}” label and {who} on it"
                                     + (" matches the filter" if self.filter_text else ""), style="dim"),
                                id="none", disabled=True))
-        filt = f"   [b]filter:[/] {self.filter_text}" if self.filter_text else ""
+        filt = f"   [b]filter:[/] {escape(self.filter_text)}" if self.filter_text else ""
         self.query_one("#htitle", Static).update(
-            f"My actions  [dim]{len(cards)} cards · {n_items} open items · label “{app.cfg.actions_label}”[/]{filt}")
+            f"My actions  [dim]{len(cards)} cards · {n_items} open items · label “{escape(app.cfg.actions_label)}”[/]{filt}")
         set_rows(rows, opts, keep, at)
 
     def row(self) -> str:
@@ -1524,6 +1525,11 @@ class TrelloApp(App):
         self._sync_timers: dict[str, object] = {}
         self.me_id = (self.store.history.get("me") or {}).get("id", "")
 
+    def notify(self, message, *, markup=False, **kw):
+        """Toasts carry card, list and board names typed by others: plain text, so a name like
+        `[@click=app.undo]x[/]` can't become a clickable action."""
+        super().notify(message, markup=markup, **kw)
+
     def on_mount(self):
         self.theme = "ansi-dark"
         k = self.keys
@@ -1611,8 +1617,8 @@ class TrelloApp(App):
         for s in self.screen_stack:
             if isinstance(s, BoardScreen) and s.is_mounted:
                 m = self.model
-                filt = f"   [b]filter:[/] {s.filter_text}" if s.filter_text else ""
-                s.query_one("#top", Static).update(f" [b]{m.b.get('name', '')}[/]{filt}   [dim]{self.status_text()}[/]")
+                filt = f"   [b]filter:[/] {escape(s.filter_text)}" if s.filter_text else ""
+                s.query_one("#top", Static).update(f" [b]{escape(m.b.get('name', ''))}[/]{filt}   [dim]{self.status_text()}[/]")
 
     def R(self, o: dict) -> str:
         """The Trello id of something, also when it was created a moment ago (still a tmp id on screen)."""
@@ -1955,7 +1961,7 @@ class TrelloApp(App):
             self.push_undo(f"deleted “{c['name']}”", lambda: self.restore(
                 Version(0, "card", self.R(c), bid, self.R(c), when, "app", None,
                         prev=self.store.history.last_data("card", self.R(c))), None))
-        self.push_screen(Confirm(f"Delete “{c['name']}” for good? (History keeps a copy you can restore.)"), go)
+        self.push_screen(Confirm(f"Delete “{escape(c['name'])}” for good? (History keeps a copy you can restore.)"), go)
 
     def move_dialog(self, c):
         m = self.model
@@ -1991,7 +1997,7 @@ class TrelloApp(App):
                 self.R(c), idBoard=it["board"], idList=self.R(it), pos="bottom"), it["board"], self.R(c)), "Moving the card")
             self.store.submit("bg", lambda: self.store.history.observe("card", self.R(c), bid, self.R(c), None))
             self.notify(f"Moved to {it['detail']} › {it['text']}")
-        self.push_screen(Picker(f"Move “{c['name']}” to…", lambda q: rank(items, q)), chosen)
+        self.push_screen(Picker(f"Move “{escape(c['name'])}” to…", lambda q: rank(items, q)), chosen)
 
     def labels_dialog(self, c):
         m = self.model
@@ -2009,7 +2015,7 @@ class TrelloApp(App):
             ids = list(c.get("idLabels", []))
             ids.remove(self.R(it)) if self.R(it) in ids else ids.append(self.R(it))
             self.set_card(c, idLabels=ids, undo_label="labels")
-        self.push_screen(Picker(f"Labels · {c['name']}   [dim]Enter toggles · Esc done[/]", source, on_toggle=toggle))
+        self.push_screen(Picker(f"Labels · {escape(c['name'])}   [dim]Enter toggles · Esc done[/]", source, on_toggle=toggle))
 
     def members_dialog(self, c):
         m = self.model
@@ -2024,7 +2030,7 @@ class TrelloApp(App):
             ids = list(c.get("idMembers", []))
             ids.remove(self.R(it)) if self.R(it) in ids else ids.append(self.R(it))
             self.set_card(c, idMembers=ids, undo_label="members")
-        self.push_screen(Picker(f"Members · {c['name']}   [dim]Enter toggles · Esc done[/]", source, on_toggle=toggle))
+        self.push_screen(Picker(f"Members · {escape(c['name'])}   [dim]Enter toggles · Esc done[/]", source, on_toggle=toggle))
 
     def due_dialog(self, c):
         cur = parse_time(c.get("due"))
@@ -2038,7 +2044,7 @@ class TrelloApp(App):
             except ValueError as e:
                 return self.notify(str(e), severity="error")
             self.set_card(c, due=due, undo_label="due date")
-        self.push_screen(Prompt(f"Due · {c['name']}", val,
+        self.push_screen(Prompt(f"Due · {escape(c['name'])}", val,
                                 note="2026-10-05 14:00 · 5.10. · today · tomorrow · +3d · +2w · empty removes it"), done)
 
     # -- checklists
@@ -2233,7 +2239,7 @@ class TrelloApp(App):
     def action_archive_list(self):
         lst = self.cur_list()
         if lst:
-            self.push_screen(Confirm(f"Archive list “{lst['name']}” with its cards?"),
+            self.push_screen(Confirm(f"Archive list “{escape(lst['name'])}” with its cards?"),
                              lambda yes: yes and self.set_list(lst, closed=True))
 
     def action_move_list(self, d: int):
@@ -2277,11 +2283,11 @@ class TrelloApp(App):
         if card_id:
             name = self.model.cards.get(card_id, {}).get("name", "")
             vs = fold_events(h.card_history(card_id))
-            self.push_screen(HistoryScreen(f"History · {name}   [dim]Enter on a change: see it, put it back[/]", vs,
+            self.push_screen(HistoryScreen(f"History · {escape(name)}   [dim]Enter on a change: see it, put it back[/]", vs,
                                            show_card=False))
         else:
             vs = fold_events(h.board_history(self.model.id))
-            self.push_screen(HistoryScreen(f"History · {self.model.b.get('name')}   "
+            self.push_screen(HistoryScreen(f"History · {escape(self.model.b.get('name', ''))}   "
                                            "[dim]Enter on a change: see it, put it back[/]", vs))
 
     def action_history(self):
@@ -2290,7 +2296,7 @@ class TrelloApp(App):
 
     def show_deleted(self):
         vs = fold_events(self.store.history.deleted(self.model.id))
-        self.push_screen(HistoryScreen(f"Recently deleted · {self.model.b.get('name')}   "
+        self.push_screen(HistoryScreen(f"Recently deleted · {escape(self.model.b.get('name', ''))}   "
                                        "[dim]Enter: restore[/]", vs, deleted_only=True))
 
     def action_deleted(self):
