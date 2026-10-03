@@ -8,18 +8,24 @@ and ffmpeg turn those into 1920x1080 video.
 """
 
 import asyncio
+import base64
 import hashlib
 import html
+import io
 import re
 import shutil
 import subprocess
 import time
+from functools import lru_cache
 from pathlib import Path
+
+from rich.cells import cell_len
 
 HERE = Path(__file__).resolve().parent
 OUT = HERE / "out"
 COLS, ROWS = 118, 34
 FONT = "JetBrainsMono Nerd Font"      # what Omarchy's terminals use
+EMOJI_FONT = "/usr/share/fonts/noto/NotoColorEmoji.ttf"
 NARROW = "Adwaita Mono"               # the terminal's fallback for ✔ ☐ ☑ (rsvg's would be a wide emoji)
 CAPTION_FONT = "iA-Writer-Duo-S-Bold"
 BG = "#11131a"
@@ -96,7 +102,7 @@ async def story(app, film: Film, board_name: str, card_name: str):
 
     # -- filter
     await film.key("ctrl+f", 0.5, "Ctrl+F filters cards by any text in them")
-    await film.type("laravel")
+    await film.type(re.split(r"[\s-]", card_name)[0].lower())
     await film.snap(2.6)
     await film.key("escape", 0.6, "")
 
@@ -167,26 +173,52 @@ async def story(app, film: Film, board_name: str, card_name: str):
 
 # ------------------------------------------------------------ rendering
 
+@lru_cache(64)
+def emoji_png(glyph: str) -> str:
+    """A color emoji as a data: URI (rsvg would draw it in one flat color)."""
+    from PIL import Image, ImageDraw, ImageFont
+    font = ImageFont.truetype(EMOJI_FONT, 109)            # the one size the bitmap font has
+    im = Image.new("RGBA", (160, 160))
+    ImageDraw.Draw(im).text((8, 8), glyph, font=font, embedded_color=True)
+    im = im.crop(im.getbbox() or (0, 0, 1, 1))
+    buf = io.BytesIO()
+    im.save(buf, "PNG")
+    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+
+
 def fix_svg(svg: str) -> str:
-    """Make rsvg draw Textual's SVG the way a terminal does."""
+    """Make rsvg draw Textual's SVG the way a terminal does: every character in its own cell
+    (rsvg stretches runs unevenly and drops nbsp), emoji in color."""
     svg = re.sub(r'font-family:\s*"?Fira Code"?(, monospace)?', f'font-family: "{FONT}", monospace', svg)
     svg = svg.replace("font-family: arial", f'font-family: "{FONT}"')
 
-    def run(m):             # rsvg drops leading/trailing nbsp and stretches the rest: shift x instead
+    def run(m):
         attrs, chars = m.group(1), html.unescape(m.group(2))
         if not chars:
             return m.group(0)
-        cw = float(re.search(r'textLength="([\d.]+)"', attrs).group(1)) / len(chars)
-        core = chars.strip("\xa0")
-        if not core:
-            return ""
-        x = float(re.search(r' x="([\d.]+)"', attrs).group(1)) + (len(chars) - len(chars.lstrip("\xa0"))) * cw
-        attrs = re.sub(r' x="[\d.]+"', f' x="{x:.1f}"', attrs)
-        attrs = re.sub(r'textLength="[\d.]+"', f'textLength="{len(core) * cw:.1f}"', attrs)
-        body = html.escape(core, quote=False)
-        for g in "✔☐☑":
-            body = body.replace(g, f'<tspan style="font-family: {NARROW}">{g}</tspan>')
-        return f"<text{attrs}>{body}</text>"
+        cw = float(re.search(r'textLength="([\d.]+)"', attrs).group(1)) / max(1, cell_len(chars))
+        x = float(re.search(r' x="([\d.]+)"', attrs).group(1))
+        y = float(re.search(r' y="([\d.]+)"', attrs).group(1))
+        clip = re.search(r'clip-path="[^"]*"', attrs)
+        base = re.sub(r' (x|y|textLength)="[^"]*"', "", attrs)
+        out, i = [], 0
+        while i < len(chars):
+            g = chars[i]
+            i += 1
+            while i < len(chars) and (chars[i] in "\ufe0f\u200d" or chars[i - 1] == "\u200d"):
+                g += chars[i]
+                i += 1
+            w = cell_len(g)
+            if ord(g[0]) >= 0x2300 and (w == 2 or "️" in g):
+                size = min(w * cw, 21)
+                out.append(f'<image x="{x + (w * cw - size) / 2:.1f}" y="{y - 17.5:.1f}" width="{size:.1f}" '
+                           f'height="{size:.1f}" {clip.group(0) if clip else ""} href="{emoji_png(g)}"/>')
+            elif g in "✔☐☑":                                 # rsvg's would be a wide emoji
+                out.append(f'<text{base} x="{x:.1f}" y="{y:.1f}" style="font-family: {NARROW}">{g}</text>')
+            elif g.strip("\xa0 "):
+                out.append(f'<text{base} x="{x:.1f}" y="{y:.1f}">{html.escape(g, quote=False)}</text>')
+            x += w * cw
+        return "".join(out)
     return re.sub(r"<text([^>]*textLength[^>]*)>([^<]*)</text>", run, svg)
 
 

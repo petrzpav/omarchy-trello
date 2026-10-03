@@ -41,7 +41,8 @@ BOARDS = {
         "Doing": [
             ("Homepage hero and photos", ["design"], ["clara", "mia"], 3,
              {"Hero": [("Pick the photo", True), ("Crop for mobile", True), ("Headline in two lengths", False)],
-              "Photos": [("Brewery tour set", True), ("Taproom at night", False)]},
+              "Photos": [("Brewery tour set", True), ("Taproom at night", False)],
+              "Copy": [("Headline", True), ("Subline", False), ("Button label", False)]},
              "Use the photos from the extra day; the taproom ones are the best.", []),
             ("Opening hours from Google", ["dev"], ["tom"], None,
              {"Hours": [("Read them from the profile", True), ("Holiday hours", False)]}, "", []),

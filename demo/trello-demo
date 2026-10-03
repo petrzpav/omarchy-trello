@@ -7,4 +7,4 @@
 
 root=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
 export UV_PROJECT_ENVIRONMENT="${XDG_DATA_HOME:-$HOME/.local/share}/petrzpav-trello/venv"
-exec uv run --quiet --project "$root" python "$root/demo/demo.py" "$@"
+exec uv run --quiet --with pillow --project "$root" python "$root/demo/demo.py" "$@"
