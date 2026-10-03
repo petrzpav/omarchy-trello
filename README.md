@@ -67,6 +67,16 @@ actions_items = 3
 
 Every key can be changed in `~/.config/petrzpav-trello/config.toml` under `[keys]`.
 
+## Scripting and Claude Code
+
+`trello boards`, `board BOARD`, `card CARD`, `mine`, `actions`, `search 'words'`, `add`, `update`
+(move, due, labels, archive), `comment`, `item`, `check`, `history`, `deleted` and `restore SEQ`
+work without the client, read from the local copy and record every write in the history. A card is
+its short link, URL or part of its name. Lists take `--json`; see `trello -h`.
+
+`install.sh` links `skill/` into `~/.claude/skills/trello` when Claude Code is installed, so Claude
+can manage your cards with the same commands.
+
 ## Install
 
 ```

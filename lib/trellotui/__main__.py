@@ -48,6 +48,8 @@ def main():
     s.add_argument("-v", "--verbose", action="store_true")
     d = sub.add_parser("due", help="print how many of your cards are due within a day")
     d.add_argument("--cached", action="store_true")
+    from . import tools
+    tools.add_parsers(sub)
     args = p.parse_args()
 
     if args.cmd == "auth":
@@ -55,6 +57,8 @@ def main():
     cfg = config.load()
     if not cfg.api_key or not cfg.token:
         sys.exit("No Trello key yet: run `trello auth`")
+    if getattr(args, "func", None):
+        return args.func(cfg, args)
     if args.cmd == "snapshot":
         cmd_snapshot(cfg, args)
     elif args.cmd == "due":

@@ -34,7 +34,7 @@ if [[ ${1:-} == --remove ]]; then
     mine_link "$units/$unit" && rm -f "$units/$unit"
   done
   systemctl --user daemon-reload >/dev/null 2>&1 || true
-  for f in "$bin/trello" "$bin/trello-window"; do
+  for f in "$bin/trello" "$bin/trello-window" "$HOME/.claude/skills/trello"; do
     mine_link "$f" && rm -f "$f"
   done
   echo "Removed. Your config ($conf) and history (~/.local/share/petrzpav-trello) are left in place."
@@ -44,6 +44,14 @@ fi
 mkdir -p "$bin"
 link "$root/bin/trello"
 link "$root/bin/trello-window"
+if [[ -d $HOME/.claude ]]; then   # a skill, so Claude Code can drive the `trello` commands
+  skill="$HOME/.claude/skills/trello"
+  if [[ -e $skill || -L $skill ]] && ! mine_link "$skill"; then
+    echo "skipped $skill: it already exists and isn't from this plugin"
+  else
+    mkdir -p "$HOME/.claude/skills" && ln -sfn "$root/skill" "$skill"
+  fi
+fi
 
 if [[ ! -e $conf ]]; then
   mkdir -p "$conf"

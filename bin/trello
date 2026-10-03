@@ -6,6 +6,8 @@
 #   trello auth                 store your Trello API key and token
 #   trello snapshot [--force]   record changed boards in the history (the timer runs this)
 #   trello due [--cached]       how many of your cards are due within a day
+#   trello boards|board|card|search|mine|actions|add|update|comment|item|check|history|restore …
+#                               scriptable commands, see `trello -h`
 #
 # Config lives in ~/.config/petrzpav-trello (config.toml, secrets).
 
