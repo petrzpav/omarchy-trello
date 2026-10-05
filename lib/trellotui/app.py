@@ -20,7 +20,7 @@ from textual.actions import SkipAction
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.markup import escape
-from textual.containers import HorizontalScroll, Vertical
+from textual.containers import HorizontalScroll, Vertical, VerticalScroll
 from textual.screen import ModalScreen, Screen
 from textual.widgets import Footer, Input, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
@@ -420,11 +420,18 @@ class Help(ModalScreen):
         t = Table.grid(padding=(0, 2))
         t.add_column(style="bold", no_wrap=True)
         t.add_column()
-        for k, d in self.rows:
-            t.add_row(k, d)
-        with Vertical(classes="dialog wide"):
-            yield Static("Keys", classes="dialog-title")
+        for i, row in enumerate(self.rows):
+            if isinstance(row, str):    # a section heading
+                t.add_row(Text(("\n" if i else "") + row, style="bold underline"), "")
+            else:
+                t.add_row(*row)
+        with VerticalScroll(classes="dialog wide") as body:    # scrolls when the window is short
+            yield Static("Keys   [dim]↑ ↓ scroll · Esc close[/]", classes="dialog-title")
             yield Static(t)
+        self.body = body
+
+    def on_mount(self):
+        self.body.focus()
 
 
 # ------------------------------------------------------------ board
@@ -1874,25 +1881,38 @@ class TrelloApp(App):
     def action_help(self):
         k = {n: pretty(v) for n, v in self.keys.items()}
         self.push_screen(Help([
+            "Moving around",
             ("← → ↑ ↓  Enter", "move between lists and cards · open a card"),
-            ("Shift+← →  Shift+↑ ↓", "move the card to the next list · up/down (items too, in a card)"),
-            (f"{k['palette']}", "go to any card or board, on every board; type > for commands"),
-            (f"{k['boards']}", "switch board"),
-            (f"{k['filter']}  ·  Esc", "filter cards on this board (name, description, checklists…) · clear"),
-            (f"{k['new']}  ·  {k['new_checklist']}", "new card (in a card: new checklist item) · new checklist"),
+            ("Esc", "back · close a dialog · clear the filter"),
+            (k["palette"], "go to any card or board, on every board; type > for commands"),
+            (k["boards"], "switch board"),
+            (k["filter"], "filter cards on this board (text, labels, members, checklists…)"),
+            (k["actions"], "my actions: “action” cards I'm on, from every board"),
+            "Cards",
+            (k["new"], "new card (in a card: new checklist item)"),
             (f"{k['rename']} / Enter", "rename / edit what's under the cursor"),
-            ("Space", "in a card: tick an item (on the details row: due done)"),
-            ("← / →", "in a card, on a checklist heading: fold / unfold it"),
-            (f"{k['hide_done']}", "hide / show completed checklist items"),
-            (f"{k['move']}  ·  {k['labels']}  ·  {k['members']}  ·  {k['due']}", "move to list · labels · members · due date"),
-            (f"{k['comment']}", "comment"),
-            (f"{k['archive']}", "archive card · in a card: delete item / checklist / comment"),
-            (f"{k['undo']}", "undo (again and again)"),
-            (f"{k['history']}", "history of the card / the board: every change, with restore"),
-            (f"{k['deleted']}", "recently deleted: cards, checklists, items, comments → restore"),
-            (f"{k['browser']}", "open in the browser"),
-            (f"{k['copy_link']}", "copy the link of the card (or the board)"),
-            (f"{k['actions']}", "my actions: “action” cards I'm on, from every board, with their next items"),
+            ("Shift+← →  Shift+↑ ↓", "move the card to the next list · up / down (items too)"),
+            (k["move"], "move to another list (also on another board)"),
+            (k["labels"], "labels: Enter toggles one"),
+            (k["members"], "members: Enter adds / removes one"),
+            (k["due"], "due date"),
+            (k["comment"], "comment"),
+            (k["archive"], "archive card · in a card: delete item / checklist / comment"),
+            "Checklists (in a card)",
+            (k["new_checklist"], "new checklist"),
+            ("Space", "tick an item (on the details row: due done)"),
+            ("← / →", "on a checklist heading: fold / unfold it"),
+            (k["hide_done"], "hide / show completed items"),
+            "Editors",
+            (f"{k['save']}  ·  Esc", "save the description or comment · cancel"),
+            "History",
+            (k["undo"], "undo (again and again)"),
+            (k["history"], "history of the card / the board: every change, with restore"),
+            (k["deleted"], "recently deleted: cards, checklists, items, comments → restore"),
+            "Other",
+            (k["browser"], "open in the browser"),
+            (k["copy_link"], "copy the link of the card (or the board)"),
+            (f"{k['palette']} >", "lists: new, rename, archive, move left / right · archived cards"),
             (f"{k['refresh']}  ·  {k['help']}  ·  Ctrl+Q", "refresh · this help · quit"),
         ]))
 

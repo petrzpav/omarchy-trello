@@ -55,8 +55,12 @@ actions_items = 3
 | `Space` | tick an item |
 | `← →` | in a card, on a checklist heading: fold / unfold it |
 | `Alt+C` | hide / show completed checklist items (remembered) |
-| `Ctrl+L`, `Alt+L`, `Alt+M`, `Alt+D` | move to list (also on another board), labels, members, due date |
+| `Ctrl+L` | move to another list (also on another board) |
+| `Alt+L` | labels: `Enter` toggles one |
+| `Alt+M` | members: `Enter` adds / removes one |
+| `Alt+D` | due date |
 | `Ctrl+R` | comment |
+| `Ctrl+S`, `Esc` | in the description / comment editor: save, cancel |
 | `Delete` | archive the card; in a card, delete the item / checklist / comment |
 | `Ctrl+Z` | undo |
 | `Alt+H`, `Alt+R` | history, recently deleted |
