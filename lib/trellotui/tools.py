@@ -427,6 +427,21 @@ def _label_ids(ctx: Ctx, b: dict, names: list[str]) -> list[str]:
     return out
 
 
+def _member_ids(b: dict, names: list[str]) -> list[str]:
+    out = []
+    for n in names:
+        want = fold(n.lstrip("@"))
+        keys = lambda m: (fold(m.get("username") or ""), fold(m.get("fullName") or ""), fold(m.get("initials") or ""))
+        hit = [m for m in b.get("members", []) if m["id"] == n or want in keys(m)] or \
+            [m for m in b.get("members", []) if any(want in k for k in keys(m))]
+        if len(hit) != 1:
+            _die(f"member {n!r}: " + ("; ".join(m.get("fullName") or m.get("username") for m in hit) if hit else
+                 f"not on {b['name']}; members: " + ", ".join(f"{m.get('fullName')} (@{m.get('username')})"
+                                                              for m in b.get("members", []))))
+        out.append(hit[0]["id"])
+    return out
+
+
 def cmd_add(cfg: Config, args):
     ctx = Ctx(cfg)
     b = ctx.board(ctx.find_board(args.board)["id"])
@@ -471,9 +486,12 @@ def cmd_update(cfg: Config, args):
     labels -= set(_label_ids(ctx, b, args.unlabel or []))
     if labels != set(c.get("idLabels") or []):
         f["idLabels"] = sorted(labels)
+    members = set(c.get("idMembers") or [])
     if args.me or args.not_me:
-        members = set(c.get("idMembers") or [])
         (members.add if args.me else members.discard)(ctx.me["id"])
+    members |= set(_member_ids(b, args.member or []))
+    members -= set(_member_ids(b, args.unmember or []))
+    if members != set(c.get("idMembers") or []):
         f["idMembers"] = sorted(members)
     if not f:
         _die("nothing to change")
@@ -529,10 +547,16 @@ def cmd_check(cfg: Config, args):
     if len(hit) != 1:
         _die(f"item {args.item!r}: " + ("; ".join(i["name"] for _, i in hit) if hit else "no match"))
     cl, it = hit[0]
-    new = ctx.api.update_item(c["id"], it["id"], state="incomplete" if args.uncheck else "complete")
+    if args.rename:
+        new = ctx.api.update_item(c["id"], it["id"], name=args.rename)
+    else:
+        new = ctx.api.update_item(c["id"], it["id"], state="incomplete" if args.uncheck else "complete")
     ctx.store.rec("item", {**new, "idChecklist": cl["id"]}, b["id"], c["id"])
     ctx.refresh(b["id"])
-    print(f"{'unchecked' if args.uncheck else 'checked'} “{it['name']}”")
+    if args.rename:
+        print(f"renamed “{it['name']}” → “{args.rename}”")
+    else:
+        print(f"{'unchecked' if args.uncheck else 'checked'} “{it['name']}”")
 
 
 # ------------------------------------------------------------ argparse
@@ -620,6 +644,8 @@ def add_parsers(sub):
     p.add_argument("--unlabel", action="append", help="remove a label")
     p.add_argument("--me", action="store_true", help="assign to me")
     p.add_argument("--not-me", action="store_true")
+    p.add_argument("--member", action="append", help="add a board member (username, name or initials)")
+    p.add_argument("--unmember", action="append", help="remove a member")
     p.add_argument("--archive", action="store_true")
     p.add_argument("--unarchive", action="store_true")
     p.set_defaults(func=cmd_update)
@@ -639,4 +665,5 @@ def add_parsers(sub):
     p.add_argument("card")
     p.add_argument("item")
     p.add_argument("--uncheck", action="store_true")
+    p.add_argument("--rename", metavar="TEXT", help="change the item's text instead of ticking it")
     p.set_defaults(func=cmd_check)

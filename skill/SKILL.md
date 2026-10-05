@@ -46,11 +46,11 @@ Every read command takes `--json`.
 ```
 trello add BOARD LIST 'name' [--desc …|--desc-file F|-] [--due DATE] [--label L]… [--me] [--top]
 trello update CARD [--name] [--desc|--desc-file] [--due DATE|none] [--done|--undone]
-                   [--move [BOARD/]LIST [--top]] [--label L]… [--unlabel L]… [--me|--not-me]
+                   [--move [BOARD/]LIST [--top]] [--label L]… [--unlabel L]… [--me|--not-me] [--member M]… [--unmember M]…
                    [--archive|--unarchive]
 trello comment CARD 'text'          # '-' = stdin
 trello item CARD 'item' ['item'…] [--checklist NAME]   # first checklist, or the named one (created if missing)
-trello check CARD 'part of item text' [--uncheck]
+trello check CARD 'part of item text' [--uncheck | --rename 'new text']
 trello restore SEQ                  # seq from `history`/`deleted`: undo that change, or bring the deleted thing back
 ```
 
