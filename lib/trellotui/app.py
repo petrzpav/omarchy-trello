@@ -11,6 +11,8 @@ import unicodedata
 from datetime import datetime, timedelta, timezone
 
 from rich.console import Group
+from rich.segment import Segment
+from rich.style import Style
 from rich.markdown import Markdown
 from rich.theme import Theme
 from rich.table import Table
@@ -22,6 +24,7 @@ from textual.binding import Binding
 from textual.markup import escape
 from textual.containers import HorizontalScroll, Vertical, VerticalScroll
 from textual.screen import ModalScreen, Screen
+from textual.strip import Strip
 from textual.widgets import Footer, Input, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
@@ -251,6 +254,23 @@ def hanging(prefix: Text, body: Text) -> Table:
     return t
 
 
+class Rows(OptionList):
+    """An OptionList whose highlighted row is drawn in the highlight's own colours: labels,
+    dates and dimmed text keep their colours elsewhere but would be unreadable on it."""
+
+    def _get_option_render(self, option, style) -> list[Strip]:
+        strips = super()._get_option_render(option, style)
+        i = self.highlighted
+        if i is None or i >= self.option_count or self.options[i] is not option:
+            return strips
+        base = style.rich_style
+        if base.bgcolor == self.get_visual_style("option-list--option").rich_style.bgcolor:
+            return strips           # an unfocused list: the highlight isn't shown, keep the colours
+        plain = Style(color=base.color, bgcolor=base.bgcolor, dim=False)
+        return [Strip([Segment(seg.text, seg.style + plain if seg.style else base, seg.control) for seg in strip],
+                      strip.cell_length) for strip in strips]
+
+
 def set_rows(rows: OptionList, opts: list, keep: str | None, at: int):
     """Replace the rows keeping the view where it was: the cursor goes back to row `keep`,
     or, when that row is gone (deleted, ticked away), stays at height `at`."""
@@ -302,7 +322,7 @@ class Picker(ModalScreen):
         with Vertical(classes="dialog wide picker"):
             yield Static(self.title_text, classes="dialog-title")
             yield Input(self.query_text, placeholder=self.placeholder)
-            yield OptionList()
+            yield Rows()
 
     def on_mount(self):
         self.refill(self.query_text)
@@ -436,7 +456,7 @@ class Help(ModalScreen):
 
 # ------------------------------------------------------------ board
 
-class CardList(OptionList):
+class CardList(Rows):
     BINDINGS = [Binding("enter", "select", show=False)]
 
     def __init__(self, list_id: str, **kw):
@@ -790,7 +810,7 @@ class CardScreen(Screen):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="page"):
-            yield OptionList(id="rows")
+            yield Rows(id="rows")
         yield Footer()
 
     def on_mount(self):
@@ -1089,7 +1109,7 @@ class ActionsScreen(Screen):
             inp = Input(placeholder="Filter: words in names, descriptions, checklists, comments…", id="afilter")
             inp.display = False
             yield inp
-            yield OptionList(id="rows")
+            yield Rows(id="rows")
         yield Footer()
 
     def on_mount(self):
@@ -1408,7 +1428,7 @@ class HistoryScreen(Screen):
     def compose(self) -> ComposeResult:
         with Vertical(id="page"):
             yield Static(self.title_text, id="htitle")
-            yield OptionList(id="events")
+            yield Rows(id="events")
         yield Footer()
 
     def on_mount(self):
