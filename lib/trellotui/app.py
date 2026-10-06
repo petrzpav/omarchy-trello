@@ -1577,13 +1577,29 @@ class TrelloApp(App):
         bid = self.store.history.get("last_board") or self.cfg.default_board
         if bid and not any(b["id"] == bid for b in boards):
             bid = next((b["id"] for b in boards if b["name"] == bid), bid)
-        if bid:
+        if (self.store.history.get("goto") or {}).get("at", 0) > time.time() - 60:
+            self.call_after_refresh(self.check_goto)
+        elif bid:
             self.call_after_refresh(self.open_board, bid)
         elif boards:
             self.call_after_refresh(self.action_boards)
         self.store.submit("bg", self.store.me, lambda me: setattr(self, "me_id", me["id"]), self.fail(""))
         self.refresh_boards()
         self.set_interval(self.cfg.poll, self.poll)
+        self.set_interval(1, self.check_goto)
+
+    def check_goto(self):
+        """A card or board asked for by `trello open` (a Trello link clicked in Slack…)."""
+        goto = self.store.history.get("goto")
+        if not goto:
+            return
+        self.store.history.put("goto", None)
+        if time.time() - goto.get("at", 0) > 60:
+            return
+        if goto["board"] != self.board_id or not goto.get("card"):
+            self.open_board(goto["board"])
+        if goto.get("card"):
+            self.open_card(goto["card"])
 
     # -- helpers
 

@@ -32,6 +32,7 @@ description: >
 trello boards
 trello board BOARD [--list LIST] [--all] [--fetch]   # lists with cards: labels, due, ☑ done/total, members
 trello card CARD [--fetch]          # description, checklists with [x] items, comments
+trello open CARD|BOARD-URL          # show it to the user in the client window (opens or focuses it)
 trello mine [--due]                 # open cards assigned to the user, soonest due first
 trello actions [--items 3]          # the client's "My actions": cards labelled `action` with the user, plus next open items
 trello search 'words' [--all]       # every word in name, description, checklist items or comments

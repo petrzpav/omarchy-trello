@@ -10,6 +10,8 @@ case don't matter).
 
 import json
 import re
+import shutil
+import subprocess
 import sys
 import time
 from datetime import datetime, timedelta
@@ -559,6 +561,20 @@ def cmd_check(cfg: Config, args):
         print(f"{'unchecked' if args.uncheck else 'checked'} “{it['name']}”")
 
 
+def cmd_open(cfg: Config, args):
+    """Show a card or board in the client, opening its window if needed (links from Slack, etc.)."""
+    ctx = Ctx(cfg)
+    if m := re.search(r"trello\.com/b/([A-Za-z0-9]+)", args.what):
+        goto = {"board": ctx.find_board(m.group(1))["id"]}
+    else:
+        c, b = ctx.find_card(args.what)
+        goto = {"board": b["id"], "card": c["id"]}
+    ctx.h.put("goto", {**goto, "at": time.time()})
+    window = shutil.which("trello-window")
+    if window:
+        subprocess.Popen([window], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+
+
 # ------------------------------------------------------------ argparse
 
 def add_parsers(sub):
@@ -583,6 +599,10 @@ def add_parsers(sub):
     p.add_argument("--fetch", action="store_true")
     js(p)
     p.set_defaults(func=cmd_card)
+
+    p = sub.add_parser("open", help="show a card or board (link, short link or name) in the client")
+    p.add_argument("what")
+    p.set_defaults(func=cmd_open)
 
     p = sub.add_parser("search", help="cards whose name, description, checklists or comments have every word")
     p.add_argument("query")
