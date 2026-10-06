@@ -5,6 +5,7 @@
 # and never touches an existing config.
 #
 #   install.sh              install
+#   install.sh --skill      install, and also let Claude Code use `trello` (~/.claude/skills/trello)
 #   install.sh --remove     undo all of it (your config and history stay)
 
 set -euo pipefail
@@ -44,7 +45,7 @@ fi
 mkdir -p "$bin"
 link "$root/bin/trello"
 link "$root/bin/trello-window"
-if [[ -d $HOME/.claude ]]; then   # a skill, so Claude Code can drive the `trello` commands
+if [[ ${1:-} == --skill ]]; then   # only when asked: a skill is visible to Claude Code in every project
   skill="$HOME/.claude/skills/trello"
   if [[ -e $skill || -L $skill ]] && ! mine_link "$skill"; then
     echo "skipped $skill: it already exists and isn't from this plugin"
