@@ -37,6 +37,6 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 - Names typed by others are shown as plain text, never as Textual markup.
 
-[Unreleased]: https://https://github.com/petrzpav/omarchy-trello/compare/staging...dev
+[Unreleased]: https://github.com/petrzpav/omarchy-trello/compare/staging...dev
 [0.2.0]: https://github.com/petrzpav/omarchy-trello/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/petrzpav/omarchy-trello/releases/tag/v0.1.0
