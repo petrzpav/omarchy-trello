@@ -997,15 +997,21 @@ class CardScreen(Screen):
         def add(name):
             if not name or not name.strip():
                 return
-            items = cl.get("checkItems", [])
+            # a sync may have put a fresh copy of the board in place while the prompt was open
+            cc = self.card or c
+            ncl = next((x for x in app.model.checklists(cc["id"]) if x["id"] == cl["id"]), cl)
+            items = ncl.get("checkItems", [])
             ids = [i["id"] for i in items]
             i = ids.index(it["id"]) + 1 if it and it["id"] in ids else len(items)
             pos = between(items[i - 1]["pos"] if i > 0 else None, items[i]["pos"] if i < len(items) else None)
-            new = app.new_item(c, cl, name.strip(), pos)
-            self.folded.discard(cl["id"])
+            new = app.new_item(cc, ncl, name.strip(), pos)
+            self.folded.discard(ncl["id"])
             self.paint()
             rows = self.query_one("#rows", OptionList)
-            rows.highlighted = rows.get_option_index(f"it:{cl['id']}:{new['id']}")
+            try:
+                rows.highlighted = rows.get_option_index(f"it:{ncl['id']}:{new['id']}")
+            except Exception:  # noqa: BLE001 - OptionDoesNotExist: the row is hidden, keep the cursor
+                pass
             self.action_new_item()
         app.push_screen(Prompt(f"New item in {escape(cl['name'])}", note="Enter adds it and asks for the next one · Esc stops"), add)
 
