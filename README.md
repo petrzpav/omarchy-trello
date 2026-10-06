@@ -78,8 +78,9 @@ Every key can be changed in `~/.config/petrzpav-trello/config.toml` under `[keys
 work without the client, read from the local copy and record every write in the history. A card is
 its short link, URL or part of its name. Lists take `--json`; see `trello -h`.
 
-`install.sh` links `skill/` into `~/.claude/skills/trello` when Claude Code is installed, so Claude
-can manage your cards with the same commands.
+To let Claude Code manage your cards with the same commands, run `install.sh --skill`: it links
+`skill/` into `~/.claude/skills/trello`, so Claude knows them in every project. Plain `install.sh`
+leaves `~/.claude` alone; `--remove` takes the link back.
 
 ## Install
 
