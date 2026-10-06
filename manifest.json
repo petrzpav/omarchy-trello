@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "petrzpav.trello",
   "name": "Trello",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "author": "Pavel Petržela",
   "license": "MIT",
   "description": "Fast terminal Trello: arrow keys, Ctrl+P to any card, and a history that brings back deleted checklists, items, cards and comments.",

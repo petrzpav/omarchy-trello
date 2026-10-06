@@ -6,6 +6,12 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-06
+
+### Added
+
+- Instructions for AI agents: the repository follows Flow (ig-flow and ig-changelog skills).
+
 ## [0.2.0] - 2026-10-06
 
 ### Added
@@ -38,5 +44,6 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 - Names typed by others are shown as plain text, never as Textual markup.
 
 [Unreleased]: https://github.com/petrzpav/omarchy-trello/compare/staging...dev
+[0.2.1]: https://https://github.com/petrzpav/omarchy-trello/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/petrzpav/omarchy-trello/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/petrzpav/omarchy-trello/releases/tag/v0.1.0
