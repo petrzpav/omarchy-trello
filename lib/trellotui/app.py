@@ -5,6 +5,7 @@ first and sent to Trello behind it (in order), so nothing waits for the network.
 """
 
 import itertools
+import re
 import subprocess
 import time
 import unicodedata
@@ -401,27 +402,97 @@ class Confirm(ModalScreen):
             yield Static("Enter yes  ·  Esc no", classes="note")
 
 
+class Writing(TextArea):
+    """Leaves Tab to the editor while the mention list is open."""
+
+    def check_consume_key(self, key: str, character: str | None = None) -> bool:
+        return not (key == "tab" and self.screen.open) and super().check_consume_key(key, character)
+
+
 class Editor(ModalScreen):
-    """Multi-line text (description, comment). Ctrl+S saves, Esc asks before throwing changes away."""
+    """Multi-line text (description, comment). Ctrl+S saves, Esc asks before throwing changes away.
+    Typing @ offers the board's members; ↑↓ choose, Enter or Tab puts in their @username."""
+
+    MENTION = re.compile(r"(?:^|(?<=[\s(]))@([\w.-]*)$")
 
     def __init__(self, title: str, text: str, save_key: str):
         super().__init__()
         self.title_text, self.text = title, text
         self._bindings.bind(save_key, "save", "Save", priority=True)
         self._bindings.bind("escape", "cancel", "Cancel", priority=True)
+        for key, action in (("up", "pick(-1)"), ("down", "pick(1)"), ("enter,tab", "mention")):
+            self._bindings.bind(key, action, show=False, priority=True)
         self.save_key = save_key
+        self.mentions: list[dict] = []
+        self.at: tuple[int, int] | None = None      # where the @ being typed is
+        self.dismissed: tuple[int, int] | None = None   # an @ whose list Esc closed
 
     def compose(self) -> ComposeResult:
         with Vertical(classes="dialog editor"):
-            yield Static(f"{self.title_text}   [dim]{pretty(self.save_key)} save · Esc cancel · Markdown[/]",
+            yield Static(f"{self.title_text}   [dim]{pretty(self.save_key)} save · Esc cancel · Markdown · @ mention[/]",
                          classes="dialog-title")
-            yield TextArea(self.text, soft_wrap=True, show_line_numbers=False, tab_behavior="indent")
+            yield Writing(self.text, soft_wrap=True, show_line_numbers=False, tab_behavior="indent")
+        yield Rows(id="mentions")
         yield Footer()
+
+    def on_mount(self):
+        self.query_one("#mentions").display = False
+
+    @property
+    def open(self) -> bool:
+        return self.query_one("#mentions").display
+
+    def check_action(self, action: str, parameters) -> bool | None:
+        return self.open if action in ("pick", "mention") else True
+
+    @on(TextArea.Changed)
+    @on(TextArea.SelectionChanged)
+    def typed(self):
+        ta, ol = self.query_one(TextArea), self.query_one("#mentions", OptionList)
+        row, col = ta.cursor_location
+        m = self.MENTION.search(ta.document.get_line(row)[:col]) if ta.selection.is_empty else None
+        members = self.app.model.members.values() if m else ()
+        items = [{"text": mb["fullName"], "detail": mb.get("username", ""), "username": mb.get("username", ""),
+                  "fold": fold(f"{mb['fullName']} {mb.get('username', '')}")} for mb in members if mb.get("username")]
+        self.mentions = rank(items, m.group(1), 8) if m else []
+        if not self.mentions or (row, m.start(1) - 1) == self.dismissed:
+            ol.display, self.at = False, None
+            return
+        self.at = (row, m.start(1) - 1)
+        ol.set_options([Option(highlight(it["text"], m.group(1)) + Text(f"  @{it['username']}", style="dim"))
+                        for it in self.mentions])
+        ol.highlighted = 0
+        x, y = ta.cursor_screen_offset
+        width = min(60, max(len(it["text"]) + len(it["username"]) + 5 for it in self.mentions))
+        below = y + 1 + len(self.mentions) <= self.size.height
+        ol.styles.width = width
+        ol.styles.offset = (max(0, min(x - 2 - len(m.group(1)), self.size.width - width)),
+                            y + 1 if below else y - len(self.mentions))
+        ol.display = True
+
+    def action_pick(self, d: int):
+        ol = self.query_one("#mentions", OptionList)
+        ol.highlighted = max(0, min(ol.option_count - 1, (ol.highlighted or 0) + d))
+
+    def action_mention(self):
+        ta, ol = self.query_one(TextArea), self.query_one("#mentions", OptionList)
+        it = self.mentions[ol.highlighted or 0]
+        ta.replace(f"@{it['username']} ", self.at, ta.cursor_location)
+        ol.display = False
+
+    @on(OptionList.OptionSelected, "#mentions")
+    def clicked(self, ev: OptionList.OptionSelected):
+        ev.option_list.highlighted = ev.option_index
+        self.action_mention()
+        self.query_one(TextArea).focus()
 
     def action_save(self):
         self.dismiss(self.query_one(TextArea).text)
 
     def action_cancel(self):
+        if self.open:
+            self.query_one("#mentions").display, self.dismissed = False, self.at
+            return
         if self.query_one(TextArea).text == self.text:
             self.dismiss(None)
             return
@@ -1531,6 +1602,10 @@ class TrelloApp(App):
     .dialog.wide { width: 100; }
     .dialog.editor { width: 100; height: 85%; }
     .dialog.editor TextArea { height: 1fr; border: none; background: $surface; }
+    #mentions { position: absolute; overlay: screen; height: auto; max-height: 8; border: none; padding: 0;
+                background: $panel; scrollbar-size-vertical: 0; }
+    #mentions > .option-list--option { padding: 0 1; }
+    #mentions > .option-list--option-highlighted { background: ansi_blue; color: ansi_black; text-style: none; }
     .dialog OptionList { height: auto; max-height: 24; border: none; background: $surface; }
     .dialog OptionList > .option-list--option-highlighted { background: ansi_blue; color: ansi_black; text-style: none; }
     TextArea > .text-area--selection { background: ansi_blue; color: ansi_black; text-style: none; }
@@ -1947,6 +2022,7 @@ class TrelloApp(App):
             (k["hide_done"], "hide / show completed items"),
             "Editors",
             (f"{k['save']}  ·  Esc", "save the description or comment · cancel"),
+            ("@", "mention a board member: ↑↓ choose, Enter / Tab put in, Esc close"),
             "History",
             (k["undo"], "undo (again and again)"),
             (k["history"], "history of the card / the board: every change, with restore"),

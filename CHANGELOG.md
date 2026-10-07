@@ -6,6 +6,10 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Typing `@` in a comment or description offers the board's members to mention.
+
 ## [0.2.2] - 2026-10-06
 
 ### Changed

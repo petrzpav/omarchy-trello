@@ -61,6 +61,7 @@ actions_items = 3
 | `Alt+D` | due date |
 | `Ctrl+R` | comment |
 | `Ctrl+S`, `Esc` | in the description / comment editor: save, cancel |
+| `@` | in the editor: mention a board member, picked from a list |
 | `Delete` | archive the card; in a card, delete the item / checklist / comment |
 | `Ctrl+Z` | undo |
 | `Alt+H`, `Alt+R` | history, recently deleted |
