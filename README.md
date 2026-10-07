@@ -4,7 +4,7 @@ A fast terminal Trello client for [Omarchy](https://omarchy.org). Arrow keys and
 (no vim), `Ctrl+P` to jump to any card on any board, and a **history that remembers everything**:
 delete a checklist by accident in Trello and its items are gone for good. Here you get them back.
 
-![A tour of the client: filter, jump to a card, tick, delete a checklist and get it back](demo.gif)
+![A tour of the client: the board, Ctrl+P, checklists, @ mentions, delete and restore, history, My actions](demo.gif)
 
 Try it yourself without touching Trello: `demo/trello-demo --sample` runs the client offline on
 the same made-up boards (or `demo/trello-demo` on a copy of your own cached ones).

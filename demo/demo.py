@@ -1,7 +1,7 @@
 """Run the Trello client on a copy of your cached boards, offline.
 
     demo/trello-demo            the client, in this terminal
-    demo/trello-demo record     render demo/out/trello-demo.mp4 and .gif (headless)
+    demo/trello-demo record     render demo/out/trello-demo.{mp4,gif} from the made-up boards
     demo/trello-demo preview    render preview.png from the made-up boards
 
     --sample                    made-up boards (demo/sample.py) instead of your own
@@ -61,7 +61,7 @@ def make_app(cfg):
 
 def main():
     args = [a for a in sys.argv[1:] if a != "--sample"]
-    cfg, tmp = setup(sample="--sample" in sys.argv or args[:1] == ["preview"])
+    cfg, tmp = setup(sample="--sample" in sys.argv or args[:1] in (["preview"], ["record"]))
     try:
         if args[:1] == ["record"]:
             import record
