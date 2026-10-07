@@ -1,7 +1,7 @@
 """Run the Trello client on a copy of your cached boards, offline.
 
     demo/trello-demo            the client, in this terminal
-    demo/trello-demo record     render demo/out/trello-demo.mp4 (headless)
+    demo/trello-demo record     render demo/out/trello-demo.mp4 and .gif (headless)
     demo/trello-demo preview    render preview.png from the made-up boards
 
     --sample                    made-up boards (demo/sample.py) instead of your own

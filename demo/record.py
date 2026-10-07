@@ -1,10 +1,12 @@
-"""Drive the app headless through a tour and render it to an MP4.
+"""Drive the app headless through a tour and render it to an MP4 (and a GIF for the README).
 
 Every key goes through the real bindings (pilot.press); each step saves an SVG
 screenshot with how long it stays on screen and a caption. rsvg-convert, ImageMagick
 and ffmpeg turn those into 1920x1080 video.
 
     trello-demo record [BOARD] [CARD]     board and card by name (defaults below)
+    trello-demo record --sample "Alderbrew relaunch" "Homepage hero and photos"
+                                          the README's demo.gif, from the made-up boards
 """
 
 import asyncio
@@ -307,5 +309,10 @@ def main(cfg, make_app, argv):
     out = OUT / "trello-demo.mp4"
     render(film.frames, out, work)
     shutil.rmtree(work)
+    gif = out.with_suffix(".gif")              # the README's: held frames dropped, 128 colours
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", out, "-vf",
+                    "fps=10,scale=1100:-1:flags=lanczos,mpdecimate,split[a][b];"
+                    "[a]palettegen=max_colors=128:stats_mode=diff[p];[b][p]paletteuse=dither=none",
+                    "-fps_mode", "vfr", gif], check=True)
     total = sum(s for _, s, _ in film.frames)
-    print(f"{out}  {len(film.frames)} frames, {total:.1f}s")
+    print(f"{out}  {len(film.frames)} frames, {total:.1f}s\n{gif}")
