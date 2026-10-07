@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 ### Added
 
 - Typing `@` in a comment or description offers the board's members to mention.
+- `Ctrl+C` copies what's under the cursor: a card's name, a checklist item, the description, a comment, a history entry.
 
 ## [0.2.2] - 2026-10-06
 

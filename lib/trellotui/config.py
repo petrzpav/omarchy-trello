@@ -27,6 +27,7 @@ DEFAULT_KEYS = {
     "history": "alt+h",
     "deleted": "alt+r",
     "browser": "alt+o",
+    "copy": "ctrl+c",
     "copy_link": "alt+y",
     "actions": "alt+a",
     "hide_done": "alt+c",

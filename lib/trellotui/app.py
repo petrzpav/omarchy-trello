@@ -301,6 +301,12 @@ def highlight(text: str, query: str, base="") -> Text:
     return t
 
 
+def prompt_text(rows: OptionList) -> str:
+    """The plain text of the highlighted row, when it is a single line of text."""
+    opt = rows.highlighted_option
+    return opt.prompt.plain if opt and not opt.disabled and isinstance(opt.prompt, Text) else ""
+
+
 # ------------------------------------------------------------ modals
 
 class Picker(ModalScreen):
@@ -579,7 +585,7 @@ class BoardScreen(Screen):
             (k["archive"], "archive", "Archive", True), (k["filter"], "filter", "Filter", True),
             (k["history"], "history", "History", True), (k["deleted"], "deleted", "Deleted", True),
             (k["browser"], "browser", "Browser", False), (k["copy_link"], "app.copy_link", "", False),
-            (k["actions"], "app.actions", "My actions", True),
+            (k["copy"], "app.copy", "", False), (k["actions"], "app.actions", "My actions", True),
         ]:
             self._bindings.bind(key, action, desc, show=show)
         self.refresh_bindings()
@@ -702,6 +708,10 @@ class BoardScreen(Screen):
             return None, None
         opt = f.highlighted_option
         return f, self.app.model.cards.get(opt.id) if opt else None
+
+    def row_text(self) -> str:
+        _, c = self.cur()
+        return c["name"] if c else ""
 
     @on(OptionList.OptionHighlighted)
     def highlighted(self, ev: OptionList.OptionHighlighted):
@@ -897,6 +907,7 @@ class CardScreen(Screen):
             (k["members"], "members", "Members", False), (k["due"], "due", "Due", True),
             (k["archive"], "delete", "Delete", True), (k["history"], "history", "History", True),
             (k["browser"], "browser", "Browser", False), (k["copy_link"], "app.copy_link", "", False),
+            (k["copy"], "app.copy", "", False),
         ]:
             self._bindings.bind(key, action, desc, show=show, priority=key in ("space", "escape"))
         self.refresh_bindings()
@@ -984,6 +995,21 @@ class CardScreen(Screen):
     def row(self) -> str:
         opt = self.query_one("#rows", OptionList).highlighted_option
         return opt.id if opt else ""
+
+    def row_text(self) -> str:
+        c, r = self.card, self.row()
+        if not c:
+            return ""
+        if r == "title":
+            return c["name"]
+        if r == "desc":
+            return c.get("desc") or ""
+        if r.startswith(("cl:", "it:")):
+            cl, it = self.where()
+            return (it or cl or {}).get("name", "")
+        if r.startswith("cm:"):
+            return (self.comment_at() or {"data": {}})["data"].get("text", "")
+        return prompt_text(self.query_one("#rows", OptionList))       # the details row
 
     def where(self):
         """(checklist, item) under the cursor, or the last checklist."""
@@ -1196,6 +1222,7 @@ class ActionsScreen(Screen):
             ("left", "fold(True)", "", False), ("right", "fold(False)", "", False),
             (k["filter"], "filter", "Filter", True), (k["due"], "due", "Due", True),
             (k["copy_link"], "app.copy_link", "Copy link", True), (k["browser"], "browser", "Browser", False),
+            (k["copy"], "app.copy", "", False),
         ]:
             self._bindings.bind(key, action, desc, show=show, priority=key == "escape")   # the filter takes spaces
         self.refresh_bindings()
@@ -1287,6 +1314,10 @@ class ActionsScreen(Screen):
     def row(self) -> str:
         opt = self.query_one("#rows", OptionList).highlighted_option
         return opt.id if opt else ""
+
+    def row_text(self) -> str:
+        _, c, _, it = self.at()
+        return it["name"] if it else c["name"] if c and self.row().startswith("c:") else ""
 
     def at(self) -> tuple:
         """(model, card, checklist, item) under the cursor."""
@@ -1509,6 +1540,7 @@ class HistoryScreen(Screen):
         yield Footer()
 
     def on_mount(self):
+        self._bindings.bind(self.app.keys["copy"], "app.copy", show=False)
         self.paint()
         self.query_one("#events").focus()
 
@@ -1528,6 +1560,9 @@ class HistoryScreen(Screen):
         keep = ev.highlighted
         ev.set_options(opts)
         ev.highlighted = min(keep or 0, len(opts) - 1)
+
+    def row_text(self) -> str:
+        return prompt_text(self.query_one("#events", OptionList))
 
     @on(OptionList.OptionSelected)
     def chosen(self, ev: OptionList.OptionSelected):
@@ -1806,12 +1841,26 @@ class TrelloApp(App):
         url, what = (c.get("shortUrl"), f"“{c['name']}”") if c else (self.model.b.get("shortUrl"), "the board")
         if not url:
             return self.notify(f"No link for {what} yet", severity="warning")
+        self.clip(url)
+        self.notify(f"Copied the link to {what}\n{url}", timeout=3)
+
+    def action_copy(self):
+        """The text of the row under the cursor to the clipboard: a card's name, an item, the
+        description, a comment… (a mouse selection is copied by the screen before this)."""
+        text = getattr(self.screen, "row_text", lambda: "")().strip()
+        if not text:
+            return
+        self.clip(text)
+        first = text.splitlines()[0]
+        more = "…" if len(first) > 60 or len(text) > len(first) else ""
+        self.notify(f"Copied “{first[:60]}{more}”", timeout=3)
+
+    def clip(self, text: str):
         try:
-            subprocess.run(["wl-copy", "--", url], check=True, timeout=5,
+            subprocess.run(["wl-copy", "--", text], check=True, timeout=5,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except (OSError, subprocess.SubprocessError):
-            self.copy_to_clipboard(url)          # OSC 52: the terminal puts it on the clipboard
-        self.notify(f"Copied the link to {what}\n{url}", timeout=3)
+            self.copy_to_clipboard(text)         # OSC 52: the terminal puts it on the clipboard
 
     # -- boards and syncing
 
@@ -2029,6 +2078,7 @@ class TrelloApp(App):
             (k["deleted"], "recently deleted: cards, checklists, items, comments → restore"),
             "Other",
             (k["browser"], "open in the browser"),
+            (k["copy"], "copy what's under the cursor: card name, item, description, comment…"),
             (k["copy_link"], "copy the link of the card (or the board)"),
             (f"{k['palette']} >", "lists: new, rename, archive, move left / right · archived cards"),
             (f"{k['refresh']}  ·  {k['help']}  ·  Ctrl+Q", "refresh · this help · quit"),

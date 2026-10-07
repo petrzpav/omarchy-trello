@@ -66,6 +66,7 @@ actions_items = 3
 | `Ctrl+Z` | undo |
 | `Alt+H`, `Alt+R` | history, recently deleted |
 | `Alt+O` | open in the browser |
+| `Ctrl+C` | copy what's under the cursor: card name, item, description, comment… |
 | `Alt+Y` | copy the link of the card (or the board) |
 | `Alt+A` | my actions: “action” cards I'm on, from every board |
 | `F5`, `F1`, `Ctrl+Q` | refresh, help, quit |
