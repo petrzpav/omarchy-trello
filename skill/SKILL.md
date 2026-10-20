@@ -14,10 +14,12 @@ description: >
 
 ## How it works
 
-- Reads come from the local copy (`~/.local/share/petrzpav-trello/history.db`).
-  - The client and `trello-snapshot.timer` keep it at most ~5 minutes old.
-  - Add `--fetch` to `board`/`card` when freshness matters.
+- Reads come from the local copy (`~/.local/share/petrzpav-trello/history.db`), checked against Trello first.
+  - One request says which boards changed; only those are re-read. So reads are current; no `--fetch` needed.
+  - `--cached` skips the check (offline). `--fetch` on `board`/`card` re-reads the board whatever Trello says.
+  - If Trello can't be reached, reads fall back to the local copy and say so on stderr.
 - Writes go to Trello and are recorded in the history like the client's own, so they can be reverted.
+  - The board is re-read right after, so the next command and the user's open client show the change at once.
 - The history DB is the user's data. Never delete or rewrite it.
 
 ## Naming things

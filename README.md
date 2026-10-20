@@ -4,13 +4,22 @@ A fast terminal Trello client for [Omarchy](https://omarchy.org). Arrow keys and
 (no vim), `Ctrl+P` to jump to any card on any board, and a **history that remembers everything**:
 delete a checklist by accident in Trello and its items are gone for good. Here you get them back.
 
-![Trello in the terminal: a board as columns of cards](preview.png)
+![A tour of the client: the board, Ctrl+P, checklists, @ mentions, delete and restore, history, My actions](demo.gif)
+
+Try it yourself without touching Trello: `demo/trello-demo --sample` runs the client offline on
+the same made-up boards (or `demo/trello-demo` on a copy of your own cached ones).
 
 ## Why it's fast
 
 Everything is painted from a local copy at once. Every change shows on screen first and goes to
 Trello behind it, in order, so you never wait for the network. Searching (`Ctrl+P` across all boards,
 `Ctrl+F` within one) never leaves your machine, and it ignores accents (`spindl` finds *Špindl*).
+
+And it stays current. While the window has focus, the open board is checked every 10 seconds
+with one tiny request (every minute when it doesn't), and coming back to the window checks at
+once. Your other boards are checked every minute in one request for all of them. A change made
+with the `trello` commands (or by Claude) shows in an open client within a second, with no
+request at all. Set `poll` and `poll_idle` in `config.toml` to change the intervals.
 
 ## History
 
@@ -19,7 +28,7 @@ database (`~/.local/share/petrzpav-trello/history.db`). The history is recorded:
 
 - when the app syncs a board,
 - when the app itself changes something (the moment Trello confirms it),
-- every 5 minutes by `trello-snapshot.timer`, so changes made in the browser or by
+- every 3 minutes by `trello-snapshot.timer`, so changes made in the browser or by
   teammates are caught too.
 
 `Alt+H` shows the history of a card (or of the board) and `Alt+R` lists what was deleted. Enter on an
@@ -61,10 +70,12 @@ actions_items = 3
 | `Alt+D` | due date |
 | `Ctrl+R` | comment |
 | `Ctrl+S`, `Esc` | in the description / comment editor: save, cancel |
+| `@` | in the editor: mention a board member, picked from a list |
 | `Delete` | archive the card; in a card, delete the item / checklist / comment |
 | `Ctrl+Z` | undo |
 | `Alt+H`, `Alt+R` | history, recently deleted |
 | `Alt+O` | open in the browser |
+| `Ctrl+C` | copy what's under the cursor: card name, item, description, comment… |
 | `Alt+Y` | copy the link of the card (or the board) |
 | `Alt+A` | my actions: “action” cards I'm on, from every board |
 | `F5`, `F1`, `Ctrl+Q` | refresh, help, quit |
@@ -75,8 +86,9 @@ Every key can be changed in `~/.config/petrzpav-trello/config.toml` under `[keys
 
 `trello boards`, `board BOARD`, `card CARD`, `mine`, `actions`, `search 'words'`, `add`, `update`
 (move, due, labels, archive), `comment`, `item`, `check`, `history`, `deleted` and `restore SEQ`
-work without the client, read from the local copy and record every write in the history. A card is
-its short link, URL or part of its name. Lists take `--json`; see `trello -h`.
+work without the client and record every write in the history. They read the local copy after
+one quick check against Trello, which re-reads only the boards that changed (`--cached` skips it,
+for offline use). A card is its short link, URL or part of its name. Lists take `--json`; see `trello -h`.
 
 To let Claude Code manage your cards with the same commands, run `install.sh --skill`: it links
 `skill/` into `~/.claude/skills/trello`, so Claude knows them in every project. Plain `install.sh`

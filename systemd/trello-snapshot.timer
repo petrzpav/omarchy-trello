@@ -1,9 +1,11 @@
 [Unit]
-Description=Record Trello board changes every 5 minutes
+Description=Record Trello board changes every 3 minutes
 
 [Timer]
-OnBootSec=2min
-OnUnitActiveSec=5min
+# Wall-clock times, not OnBootSec: the user manager may start after the boot offset has
+# passed (then a monotonic timer never fires), and calendar times also catch up after a suspend.
+OnCalendar=*:0/3
+RandomizedDelaySec=20
 Persistent=true
 
 [Install]

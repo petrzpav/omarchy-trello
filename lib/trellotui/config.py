@@ -27,6 +27,7 @@ DEFAULT_KEYS = {
     "history": "alt+h",
     "deleted": "alt+r",
     "browser": "alt+o",
+    "copy": "ctrl+c",
     "copy_link": "alt+y",
     "actions": "alt+a",
     "hide_done": "alt+c",
@@ -39,7 +40,8 @@ DEFAULT_KEYS = {
 @dataclass
 class Config:
     default_board: str = ""
-    poll: int = 60                # seconds between syncs of the open board
+    poll: int = 10                # seconds between looks at the open board while the window has focus
+    poll_idle: int = 60           # …and while it doesn't
     column_width: int = 32
     actions_label: str = "action"   # My actions: open cards with this label…
     actions_member: str = ""        # …and this member on them (username, full name or initials; empty = me)
@@ -74,7 +76,8 @@ def load() -> Config:
         raw = tomllib.loads(path.read_text())
     cfg = Config(
         default_board=raw.get("default_board", ""),
-        poll=int(raw.get("poll", 60)),
+        poll=int(raw.get("poll", 10)),
+        poll_idle=int(raw.get("poll_idle", 60)),
         column_width=int(raw.get("column_width", 32)),
         actions_label=str(raw.get("actions_label", "action")),
         actions_member=str(raw.get("actions_member", "")),
