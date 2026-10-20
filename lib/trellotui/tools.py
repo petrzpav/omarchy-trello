@@ -1,7 +1,9 @@
 """Scriptable Trello commands (for shell scripts and AI agents): read and change boards without
-opening the client. Reads come from the local copy the client and `trello-snapshot.timer` keep
-(at most ~5 minutes old; --fetch refreshes); every write is recorded in the history like the
-client's own, so it can be reverted from there.
+opening the client. Reads come from the local copy, checked first against Trello: one request
+says which boards changed (skipped when it was asked in the last few seconds), and only those
+are fetched, side by side. `--cached` reads the local copy as it is (offline). Every write is
+recorded in the history like the client's own, so it can be reverted from there, and the board
+is re-read at once, so the next command and an open client show it.
 
 A card is named by its short link (the 8 characters in trello.com/c/XXXXXXXX), its id, its URL
 or a unique part of its name; boards and lists by a unique part of their name (accents and
@@ -14,6 +16,7 @@ import shutil
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -25,6 +28,9 @@ from .store import Store
 def fold(s: str) -> str:
     import unicodedata
     return "".join(unicodedata.normalize("NFD", ch)[0] for ch in (s or "")).lower()
+
+
+FRESH = 10    # seconds the board list (which says what changed) is trusted without asking again
 
 
 def _die(msg: str):
@@ -64,23 +70,79 @@ def parse_due(s: str) -> str | None:
 
 
 class Ctx:
-    def __init__(self, cfg: Config):
+    def __init__(self, cfg: Config, args=None):
         self.store = Store(cfg, lambda fn, *a: fn(*a))
         self.h = self.store.history
         self.api = self.store.api
+        self.cached = bool(getattr(args, "cached", False))
+        self.checked: set[str] = set()      # boards already compared with Trello in this run
+        self.offline = False
 
     @property
     def me(self) -> dict:
         return self.store.me()
 
+    def _warn_offline(self, e: Exception):
+        if not self.offline:
+            self.offline = True
+            print(f"trello: can't reach Trello ({e}); showing the local copy", file=sys.stderr)
+
     def boards(self) -> list[dict]:
-        return self.store.cached_boards() or self.store.fetch_boards()
+        """The board list, asked again when the last answer is more than FRESH seconds old: one
+        request, and it carries every board's last activity."""
+        boards = self.store.cached_boards()
+        if boards and (self.cached or self.offline or time.time() - self.h.get("fetched_at:boards", 0) < FRESH):
+            return boards
+        try:
+            return self.store.fetch_boards()
+        except Exception as e:  # noqa: BLE001 - offline: the local copy is better than nothing
+            if not boards:
+                raise
+            self._warn_offline(e)
+            return boards
+
+    def _fetch(self, bid: str):
+        try:
+            self.store.fetch_board(bid, check_writes=False)
+        except Exception as e:  # noqa: BLE001 - offline: the local copy is better than nothing
+            if not self.h.has(f"board:{bid}"):
+                raise
+            self._warn_offline(e)
 
     def board(self, bid: str, fetch=False) -> dict:
+        """A board, fresh: fetched when Trello says it changed since the local copy (or a write
+        was made after it). `fetch=True` always fetches; `fetch="check"` (before a write) asks
+        Trello about this board alone instead of trusting a board list a few seconds old."""
+        if fetch is True:
+            b, _ = self.store.fetch_board(bid, check_writes=False)
+            self.checked.add(bid)
+            return b
+        if not self.cached and not self.offline and (fetch == "check" or bid not in self.checked):
+            self.checked.add(bid)
+            try:
+                act = self.api.activity(bid) if fetch == "check" else \
+                    next((b.get("dateLastActivity") for b in self.boards() if b["id"] == bid), None)
+            except Exception as e:  # noqa: BLE001
+                self._warn_offline(e)
+                act = None
+            if not self.offline and self.store.stale(bid, act):
+                self._fetch(bid)
         b, _ = self.store.cached_board(bid)
-        if fetch or not b:
+        if not b:
             b, _ = self.store.fetch_board(bid, check_writes=False)
         return b
+
+    def all_boards(self) -> list[dict]:
+        """The board list, with every board that changed fetched first (side by side), so reads
+        across all boards (search, mine, actions, finding a card by name) are current."""
+        boards = self.boards()
+        if not self.cached and not self.offline:
+            todo = [b["id"] for b in boards if b["id"] not in self.checked
+                    and self.store.stale(b["id"], b.get("dateLastActivity"))]
+            self.checked |= {b["id"] for b in boards}
+            with ThreadPoolExecutor(4, "trello-cli") as pool:
+                list(pool.map(self._fetch, todo))
+        return boards
 
     def comments(self, bid: str) -> list[dict]:
         return self.store.cached_board(bid)[1]
@@ -112,7 +174,7 @@ class Ctx:
         what = what.strip()
         if m := re.search(r"trello\.com/c/([A-Za-z0-9]+)", what):
             what = m.group(1)
-        boards = [self.board(b["id"]) for b in self.boards()]
+        boards = [self.board(b["id"]) for b in self.all_boards()]
         exact, named = [], []
         for b in boards:
             for c in b.get("cards", []):
@@ -128,8 +190,8 @@ class Ctx:
                                         if hit else "no match"))
         c, b = hit[0]
         if fetch:
-            b = self.board(b["id"], fetch=True)
-            c = next(x for x in b["cards"] if x["id"] == c["id"])
+            b = self.board(b["id"], fetch=fetch)
+            c = next((x for x in b["cards"] if x["id"] == c["id"]), None) or _die(f"card {what!r} is gone")
         return c, b
 
 
@@ -166,7 +228,7 @@ def _print_cards(rows: list[dict], as_json: bool, with_board=True):
 # ------------------------------------------------------------ reading
 
 def cmd_boards(cfg: Config, args):
-    ctx = Ctx(cfg)
+    ctx = Ctx(cfg, args)
     boards = ctx.store.fetch_boards() if args.fetch else ctx.boards()
     if args.json:
         print(json.dumps([{"id": b["id"], "name": b["name"], "url": b.get("shortUrl")} for b in boards],
@@ -177,7 +239,7 @@ def cmd_boards(cfg: Config, args):
 
 
 def cmd_board(cfg: Config, args):
-    ctx = Ctx(cfg)
+    ctx = Ctx(cfg, args)
     b = ctx.board(ctx.find_board(args.board)["id"], fetch=args.fetch)
     lists = [l for l in sorted(b["lists"], key=lambda l: l.get("pos") or 0) if args.all or not l.get("closed")]
     if args.list:
@@ -214,7 +276,7 @@ def cmd_board(cfg: Config, args):
 
 
 def cmd_card(cfg: Config, args):
-    ctx = Ctx(cfg)
+    ctx = Ctx(cfg, args)
     c, b = ctx.find_card(args.card, fetch=args.fetch)
     r = card_row(c, b)
     r["url"] = c.get("shortUrl")
@@ -258,10 +320,10 @@ def _card_text(c: dict, b: dict, comments: list[dict]) -> str:
 
 
 def cmd_search(cfg: Config, args):
-    ctx = Ctx(cfg)
+    ctx = Ctx(cfg, args)
     words = fold(args.query).split()
     rows = []
-    for bb in ctx.boards():
+    for bb in ctx.all_boards():
         b, comments = ctx.store.cached_board(bb["id"])
         if not b:
             continue
@@ -276,10 +338,10 @@ def cmd_search(cfg: Config, args):
 
 def cmd_mine(cfg: Config, args):
     """Open cards with me on them, not in a Done list and not due-complete; soonest due first."""
-    ctx = Ctx(cfg)
+    ctx = Ctx(cfg, args)
     me = ctx.me["id"]
     rows = []
-    for bb in ctx.boards():
+    for bb in ctx.all_boards():
         b, _ = ctx.store.cached_board(bb["id"])
         open_lists = {l["id"] for l in (b or {}).get("lists", [])
                       if not l.get("closed") and not fold(l["name"]).startswith(("done", "hotovo"))}
@@ -295,11 +357,11 @@ def cmd_mine(cfg: Config, args):
 
 def cmd_actions(cfg: Config, args):
     """The client's My actions: open cards with the actions label and me on them, with their open items."""
-    ctx = Ctx(cfg)
+    ctx = Ctx(cfg, args)
     label = cfg.actions_label.strip().casefold()
     want = cfg.actions_member.strip().casefold()
     out = []
-    for bb in ctx.boards():
+    for bb in ctx.all_boards():
         b, _ = ctx.store.cached_board(bb["id"])
         if not b:
             continue
@@ -380,7 +442,7 @@ def _print_versions(ctx: Ctx, vs: list[Version], as_json: bool):
 
 
 def cmd_history(cfg: Config, args):
-    ctx = Ctx(cfg)
+    ctx = Ctx(cfg, args)
     if args.board:
         vs = ctx.h.board_history(ctx.find_board(args.board)["id"], limit=args.limit)
     elif args.card:
@@ -392,12 +454,12 @@ def cmd_history(cfg: Config, args):
 
 
 def cmd_deleted(cfg: Config, args):
-    ctx = Ctx(cfg)
+    ctx = Ctx(cfg, args)
     _print_versions(ctx, ctx.h.deleted(ctx.find_board(args.board)["id"], limit=args.limit), args.json)
 
 
 def cmd_restore(cfg: Config, args):
-    ctx = Ctx(cfg)
+    ctx = Ctx(cfg, args)
     vs = ctx.h._versions("seq=?", (args.seq,), 1)
     if not vs:
         _die(f"no history entry {args.seq}")
@@ -445,8 +507,8 @@ def _member_ids(b: dict, names: list[str]) -> list[str]:
 
 
 def cmd_add(cfg: Config, args):
-    ctx = Ctx(cfg)
-    b = ctx.board(ctx.find_board(args.board)["id"])
+    ctx = Ctx(cfg, args)
+    b = ctx.board(ctx.find_board(args.board)["id"], fetch="check")
     lst = ctx.find_list(b, args.list)
     new = ctx.api.create_card(lst["id"], args.name, pos="top" if args.top else "bottom",
                               desc=_text(args.desc, args.desc_file),
@@ -459,8 +521,8 @@ def cmd_add(cfg: Config, args):
 
 
 def cmd_update(cfg: Config, args):
-    ctx = Ctx(cfg)
-    c, b = ctx.find_card(args.card, fetch=True)
+    ctx = Ctx(cfg, args)
+    c, b = ctx.find_card(args.card, fetch="check")
     f = {}
     if args.name:
         f["name"] = args.name
@@ -477,7 +539,7 @@ def cmd_update(cfg: Config, args):
         target = b
         if "/" in args.move:
             bname, _, lname = args.move.partition("/")
-            target = ctx.board(ctx.find_board(bname.strip())["id"])
+            target = ctx.board(ctx.find_board(bname.strip())["id"], fetch="check")
             f["idBoard"] = target["id"]
         else:
             lname = args.move
@@ -497,7 +559,10 @@ def cmd_update(cfg: Config, args):
         f["idMembers"] = sorted(members)
     if not f:
         _die("nothing to change")
-    ctx.store.rec("card", ctx.api.update_card(c["id"], **f), b["id"], c["id"])
+    new = ctx.api.update_card(c["id"], **f)
+    if f.get("idBoard") and f["idBoard"] != b["id"]:      # its history moves along with it
+        ctx.h.moved(c["id"], b["id"], f["idBoard"])
+    ctx.store.rec("card", new, f.get("idBoard") or b["id"], c["id"])
     ctx.refresh(b["id"])
     if f.get("idBoard"):
         ctx.refresh(f["idBoard"])
@@ -505,8 +570,8 @@ def cmd_update(cfg: Config, args):
 
 
 def cmd_comment(cfg: Config, args):
-    ctx = Ctx(cfg)
-    c, b = ctx.find_card(args.card)
+    ctx = Ctx(cfg, args)
+    c, b = ctx.find_card(args.card, fetch="check")
     a = ctx.api.add_comment(c["id"], _text(args.text, "-" if args.text == "-" else None))
     ctx.store.rec("comment", a, b["id"], c["id"])
     ctx.refresh(b["id"])
@@ -529,8 +594,8 @@ def _checklist(ctx: Ctx, c: dict, b: dict, name: str | None, create=True) -> dic
 
 
 def cmd_item(cfg: Config, args):
-    ctx = Ctx(cfg)
-    c, b = ctx.find_card(args.card, fetch=True)
+    ctx = Ctx(cfg, args)
+    c, b = ctx.find_card(args.card, fetch="check")
     cl = _checklist(ctx, c, b, args.checklist)
     for name in args.items:
         new = ctx.api.add_item(cl["id"], name, pos="bottom")
@@ -540,8 +605,8 @@ def cmd_item(cfg: Config, args):
 
 
 def cmd_check(cfg: Config, args):
-    ctx = Ctx(cfg)
-    c, b = ctx.find_card(args.card, fetch=True)
+    ctx = Ctx(cfg, args)
+    c, b = ctx.find_card(args.card, fetch="check")
     items = [(cl, i) for cl in b.get("checklists", []) if cl["idCard"] == c["id"] for i in cl.get("checkItems", [])]
     hit = [(cl, i) for cl, i in items if i["id"] == args.item] or \
         [(cl, i) for cl, i in items if fold(i["name"]) == fold(args.item)] or \
@@ -563,7 +628,7 @@ def cmd_check(cfg: Config, args):
 
 def cmd_open(cfg: Config, args):
     """Show a card or board in the client, opening its window if needed (links from Slack, etc.)."""
-    ctx = Ctx(cfg)
+    ctx = Ctx(cfg, args)
     if m := re.search(r"trello\.com/b/([A-Za-z0-9]+)", args.what):
         goto = {"board": ctx.find_board(m.group(1))["id"]}
     else:
@@ -580,6 +645,7 @@ def cmd_open(cfg: Config, args):
 def add_parsers(sub):
     def js(p):
         p.add_argument("--json", action="store_true")
+        p.add_argument("--cached", action="store_true", help="the local copy as it is, without asking Trello (offline)")
 
     p = sub.add_parser("boards", help="your open boards")
     p.add_argument("--fetch", action="store_true")

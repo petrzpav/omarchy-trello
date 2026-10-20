@@ -21,16 +21,37 @@ class Trello:
     def __init__(self, key: str, token: str):
         if not key or not token:
             raise TrelloError("TRELLO_API_KEY / TRELLO_TOKEN missing: run `trello auth`")
-        self.http = httpx.Client(
-            base_url=BASE, timeout=30, http2=False,
-            headers={"Authorization": f'OAuth oauth_consumer_key="{key}", oauth_token="{token}"'})
+        self._auth = {"Authorization": f'OAuth oauth_consumer_key="{key}", oauth_token="{token}"'}
+        self.http = self._client()
+
+    def _client(self):
+        # Short timeouts: a socket that died in a suspend or a network switch fails fast and
+        # is retried on a new connection instead of stalling a lane for half a minute.
+        return httpx.Client(base_url=BASE, timeout=httpx.Timeout(10, connect=4), http2=False,
+                            headers=self._auth)
+
+    def reset(self):
+        """Drop pooled connections (after a long time away: they are likely dead). The old client
+        is not closed: other threads (the lanes, a fetch's parallel requests) may be inside it,
+        and closing it under them would fail their requests; its dead sockets go with it."""
+        self.http = self._client()
 
     def req(self, method: str, path: str, **params):
         params = {k: v for k, v in params.items() if v is not None}
         for attempt in range(5):
-            r = self.http.request(method, path, params=params)
+            try:
+                r = self.http.request(method, path, params=params)
+            except httpx.TransportError:
+                if method != "GET" or attempt:    # a write may have reached Trello: never resend it
+                    raise
+                self.reset()
+                continue
             if r.status_code == 429:          # 100 requests / 10 s per token
-                time.sleep(1 + attempt * 2)
+                try:
+                    wait = float(r.headers.get("Retry-After", ""))
+                except ValueError:
+                    wait = 1 + attempt * 2
+                time.sleep(min(wait, 10))
                 continue
             if r.status_code >= 400:
                 raise TrelloError(f"{method} {path}: {r.status_code} {r.text[:200]}")
@@ -57,6 +78,10 @@ class Trello:
             checklists="all", checklist_fields="name,idCard,pos",
             labels="all", label_fields="name,color", labels_limit=1000,
             members="all", member_fields="fullName,username,initials")
+
+    def activity(self, board_id: str) -> str | None:
+        """When anything on the board last changed: one tiny request, to skip unchanged boards."""
+        return self.req("GET", f"/boards/{board_id}", fields="dateLastActivity").get("dateLastActivity")
 
     def comments(self, board_id: str):
         return self.req("GET", f"/boards/{board_id}/actions", filter="commentCard", limit=1000,

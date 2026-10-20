@@ -77,6 +77,12 @@ class FakeTrello:
             return {"dateLastActivity": self.b[path.split("/")[2]].get("dateLastActivity")}
         raise TrelloError(f"demo: {method} {path} not faked")
 
+    def activity(self, board_id):
+        return self.b[board_id].get("dateLastActivity")
+
+    def reset(self):
+        pass
+
     def me(self):
         return dict(self.me_)
 
@@ -113,6 +119,14 @@ class FakeTrello:
             elif k == "pos":
                 v = num(v, [x for x in b["cards"] if x["idList"] == c["idList"]])
             c[k] = v
+        to = self.b.get(c.get("idBoard"))
+        if to is not None and to is not b:          # moved to another board, with its checklists
+            b["cards"].remove(c)
+            to["cards"].append(c)
+            for cl in [x for x in b["checklists"] if x["idCard"] == card_id]:
+                b["checklists"].remove(cl)
+                to["checklists"].append(cl)
+            self._touch(to)
         self._touch(b)
         return copy.deepcopy(c)
 
