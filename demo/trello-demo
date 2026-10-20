@@ -3,7 +3,7 @@
 # trello-demo - the Trello client on a copy of your cached boards, offline.
 #
 #   trello-demo              try it in this terminal (nothing touches Trello)
-#   trello-demo record       render out/trello-demo.mp4 headless
+#   trello-demo record       render out/trello-demo.{mp4,gif} headless, from the made-up boards
 
 root=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
 export UV_PROJECT_ENVIRONMENT="${XDG_DATA_HOME:-$HOME/.local/share}/petrzpav-trello/venv"

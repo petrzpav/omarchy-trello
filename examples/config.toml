@@ -1,8 +1,11 @@
 # Board opened first time (name or id); afterwards the last board you had open.
 default_board = ""
 
-# Seconds between checks of the open board for changes made elsewhere.
-poll = 60
+# Seconds between checks of the open board for changes made elsewhere (one tiny request),
+# while the window has focus and while it doesn't. Changes made by `trello` commands show
+# up at once either way.
+poll = 10
+poll_idle = 60
 
 # Width of one list column.
 column_width = 32

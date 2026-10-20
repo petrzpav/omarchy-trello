@@ -116,6 +116,10 @@ class History:
             row = self.db.execute("SELECT v FROM kv WHERE k=?", (k,)).fetchone()
         return json.loads(row[0]) if row else default
 
+    def has(self, k) -> bool:
+        with self.lock:
+            return self.db.execute("SELECT 1 FROM kv WHERE k=?", (k,)).fetchone() is not None
+
     def put(self, k, v):
         with self.lock:
             self.db.execute("INSERT OR REPLACE INTO kv VALUES(?,?)", (k, json.dumps(v, ensure_ascii=False)))
@@ -142,45 +146,105 @@ class History:
             n += 1
         return n
 
-    def snapshot(self, board: dict, comments: list | None, source="sync") -> int:
-        """Record a full board as fetched from Trello. Returns how many versions were added."""
+    def _snapshot_rows(self, board: dict, comments: list | None, source: str) -> int:
         bid = board["id"]
         seen = board_objects(board, comments)
-        ts = time.time()
+        if not self.db.execute("SELECT 1 FROM latest WHERE board=? LIMIT 1", (bid,)).fetchone():
+            source = "import"      # first look at this board: not a change, just where history starts
+        rows = [(k, o, bid, card, data) for (k, o), (card, data) in seen.items()]
+        # Gone since last time -> tombstone. With 1000 comments Trello may have cut older
+        # ones off, so only comments newer than the oldest one fetched can be called gone.
+        oldest = min((a["date"] for a in comments), default="") if comments and len(comments) >= 1000 else ""
+        for kind, oid, card, data in self.db.execute(
+                "SELECT kind, oid, card, data FROM latest WHERE board=? AND data IS NOT NULL", (bid,)):
+            if (kind, oid) in seen:
+                continue
+            if kind == "comment" and (comments is None or json.loads(data)["date"] < oldest):
+                continue
+            rows.append((kind, oid, bid, card, None))
+        return self._write(rows, time.time(), source)
+
+    def snapshot(self, board: dict, comments: list | None, source="sync") -> int:
+        """Record a full board as fetched from Trello. Returns how many versions were added."""
         with self.lock:
             self.db.execute("BEGIN IMMEDIATE")
             try:
-                if not self.db.execute("SELECT 1 FROM latest WHERE board=? LIMIT 1", (bid,)).fetchone():
-                    source = "import"      # first look at this board: not a change, just where history starts
-                rows = [(k, o, bid, card, data) for (k, o), (card, data) in seen.items()]
-                # Gone since last time -> tombstone. With 1000 comments Trello may have cut older
-                # ones off, so only comments newer than the oldest one fetched can be called gone.
-                oldest = min((a["date"] for a in comments), default="") if comments and len(comments) >= 1000 else ""
-                for kind, oid, card, data in self.db.execute(
-                        "SELECT kind, oid, card, data FROM latest WHERE board=? AND data IS NOT NULL", (bid,)):
-                    if (kind, oid) in seen:
-                        continue
-                    if kind == "comment" and (comments is None or json.loads(data)["date"] < oldest):
-                        continue
-                    rows.append((kind, oid, bid, card, None))
-                n = self._write(rows, ts, source)
+                n = self._snapshot_rows(board, comments, source)
                 self.db.execute("COMMIT")
             except BaseException:
                 self.db.execute("ROLLBACK")
                 raise
         return n
 
+    def save_board(self, board: dict, comments: list | None, since: float, source="sync") -> int | None:
+        """Record a board fetched at `since` and make it the cached copy, in one transaction, unless
+        something newer got there first: a write recorded after the fetch began (by this or another
+        process, the CLI, the timer) or a copy with later activity fetched meanwhile. Then nothing is
+        stored and None is returned, so an old answer never overwrites a newer one or shows up as a
+        revert in history. A fetch begun after both always gets through."""
+        bid = board["id"]
+        act = board.get("dateLastActivity") or ""
+
+        def kv(k, default=None):
+            row = self.db.execute("SELECT v FROM kv WHERE k=?", (k,)).fetchone()
+            return json.loads(row[0]) if row else default
+        with self.lock:
+            self.db.execute("BEGIN IMMEDIATE")
+            try:
+                newer = act < (kv(f"seen:{bid}") or "") and kv(f"fetched_at:{bid}", 0) > since
+                if kv(f"wrote:{bid}", 0) > since or newer:
+                    self.db.execute("ROLLBACK")
+                    return None
+                n = self._snapshot_rows(board, comments, source)
+                for k, v in ((f"board:{bid}", board), (f"comments:{bid}", comments or []),
+                             (f"seen:{bid}", board.get("dateLastActivity")), (f"fetched_at:{bid}", time.time())):
+                    self.db.execute("INSERT OR REPLACE INTO kv VALUES(?,?)", (k, json.dumps(v, ensure_ascii=False)))
+                self.db.execute("COMMIT")
+            except BaseException:
+                self.db.execute("ROLLBACK")
+                raise
+        return n
+
+    def changed_elsewhere(self) -> bool:
+        """True when another process (the CLI, the timer) committed since the last call. Costs
+        microseconds: SQLite's data_version moves only for other connections' commits."""
+        if not self.lock.acquire(blocking=False):    # busy on another thread: the next call sees it
+            return False
+        try:
+            v = self.db.execute("PRAGMA data_version").fetchone()[0]
+        finally:
+            self.lock.release()
+        old, self._data_version = getattr(self, "_data_version", v), v
+        return v != old
+
     def observe(self, kind: str, oid: str, board: str, card: str | None, obj: dict | None, source="app"):
         """Record one object the app just changed (obj None = it deleted it)."""
         with self.lock:
             self._write([(kind, oid, board, card, None if obj is None else norm(kind, obj))],
                         time.time(), source)
+            self.wrote(board)
 
     def observe_deleted(self, items: list[tuple], source="app"):
         """Tombstone several objects at once (a card with its checklists...): (kind, oid, board, card)."""
         ts = time.time()
         with self.lock:
             self._write([(k, o, b, c, None) for k, o, b, c in items], ts, source)
+            for b in {b for _, _, b, _ in items}:
+                self.wrote(b)
+
+    def moved(self, card: str, frm: str, to: str):
+        """A card went to another board: it, its checklists, items and comments now belong to `to`,
+        so the next look at `frm` doesn't tombstone them and the one at `to` sees nothing new."""
+        with self.lock:
+            self.db.execute("UPDATE latest SET board=? WHERE card=? AND board=?", (to, card, frm))
+            self.wrote(frm)
+            self.wrote(to)
+
+    def wrote(self, board: str | None):
+        """Stamp a write to `board`: a fetch that began earlier is stale (see save_board), and a
+        cached copy fetched earlier is too (the CLI refetches it before reading)."""
+        if board:
+            self.put(f"wrote:{board}", time.time())
 
     # -- reading
 
