@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
-## [Unreleased]
+## [0.3.0-rc.1] - 2026-10-20
 
 ### Added
 
@@ -73,7 +73,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 - Names typed by others are shown as plain text, never as Textual markup.
 
-[Unreleased]: https://github.com/petrzpav/omarchy-trello/compare/staging...dev
+[0.3.0-rc.1]: https://github.com/petrzpav/omarchy-trello/releases/tag/v0.2.2
 [0.2.1]: https://github.com/petrzpav/omarchy-trello/compare/v0.2.0...v0.2.1
 [0.2.2]: https://github.com/petrzpav/omarchy-trello/compare/v0.2.1...v0.2.2
 [0.2.1]: https://https://github.com/petrzpav/omarchy-trello/compare/v0.2.0...v0.2.1
