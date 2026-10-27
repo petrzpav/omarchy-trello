@@ -3,7 +3,9 @@
 Auth goes in the Authorization header so the token never shows up in a URL or a log.
 """
 
+import re
 import time
+from pathlib import Path
 
 import httpx
 
@@ -11,6 +13,7 @@ BASE = "https://api.trello.com/1"
 
 CARD_FIELDS = ("name,desc,closed,idList,idBoard,pos,idLabels,due,dueComplete,start,idMembers,"
                "dateLastActivity,shortUrl")
+ATTACHMENT_FIELDS = "name,url,bytes,mimeType,date,isUpload,fileName"
 
 
 class TrelloError(Exception):
@@ -69,12 +72,13 @@ class Trello:
 
     def board(self, board_id: str):
         """The whole board in one request: lists, every card (archived too, so history keeps
-        them), checklists with their items, labels and members."""
+        them) with its attachments, checklists with their items, labels and members."""
         return self.req(
             "GET", f"/boards/{board_id}",
             fields="name,desc,closed,dateLastActivity,shortUrl",
             lists="all", list_fields="name,closed,pos",
             cards="all", card_fields=CARD_FIELDS,
+            card_attachments="true", card_attachment_fields=ATTACHMENT_FIELDS,
             checklists="all", checklist_fields="name,idCard,pos",
             labels="all", label_fields="name,color", labels_limit=1000,
             members="all", member_fields="fullName,username,initials")
@@ -86,6 +90,19 @@ class Trello:
     def comments(self, board_id: str):
         return self.req("GET", f"/boards/{board_id}/actions", filter="commentCard", limit=1000,
                         fields="data,date,idMemberCreator", memberCreator_fields="fullName")
+
+    def download(self, url: str, dest: Path):
+        """An uploaded attachment's file (its `url`, which needs the token) to `dest`. Only
+        Trello's own download links: the token is never sent anywhere else."""
+        m = re.fullmatch(r"https://(?:api\.)?trello\.com/1(/cards/\w+/attachments/\w+/download/[^?#]+)", url or "")
+        if not m:
+            raise TrelloError(f"not a Trello attachment: {url}")
+        with self.http.stream("GET", m.group(1), follow_redirects=True) as r:
+            if r.status_code >= 400:
+                raise TrelloError(f"GET {m.group(1)}: {r.status_code}")
+            with dest.open("wb") as f:
+                for chunk in r.iter_bytes():
+                    f.write(chunk)
 
     # -- cards
 

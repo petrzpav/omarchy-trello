@@ -22,7 +22,7 @@ from pathlib import Path
 
 from .config import Config
 from .history import Version
-from .store import Store
+from .store import Store, attachment_path, size
 
 
 def fold(s: str) -> str:
@@ -275,6 +275,29 @@ def cmd_board(cfg: Config, args):
             print(f"  {r['card']}  {r['name']}{extra}")
 
 
+def attachments(c: dict) -> list[dict]:
+    """A card's attachments, oldest first, numbered from 1 (the number `trello attachment` takes).
+    Uploaded files have the `path` they are (or will be) downloaded to; links only their `url`."""
+    out = []
+    for n, a in enumerate(sorted(c.get("attachments") or [], key=lambda a: a.get("date") or ""), 1):
+        r = {"n": n, "id": a["id"], "name": a.get("name") or a.get("fileName") or "", "upload": bool(a.get("isUpload")),
+             "url": a.get("url", ""), "bytes": a.get("bytes"), "mime": a.get("mimeType") or "",
+             "date": (a.get("date") or "")[:16].replace("T", " ")}
+        if r["upload"]:
+            path = attachment_path(a)
+            r["path"], r["downloaded"] = str(path), path.exists()
+        out.append(r)
+    return out
+
+
+def _print_attachments(rows: list[dict], card: str):
+    for a in rows:
+        what = f"{size(a['bytes'])}  {a['date'][:10]}" if a["upload"] else a["url"]
+        print(f"  {a['n']}. {a['name']}  {what}" + ("  (downloaded)" if a.get("downloaded") else ""))
+    if any(a["upload"] for a in rows):
+        print(f"  → trello attachment {card} N   downloads one and prints its path (--open opens it)")
+
+
 def cmd_card(cfg: Config, args):
     ctx = Ctx(cfg, args)
     c, b = ctx.find_card(args.card, fetch=args.fetch)
@@ -291,6 +314,7 @@ def cmd_card(cfg: Config, args):
                       "date": a.get("date", "")[:16].replace("T", " "), "text": a["data"].get("text", "")}
                      for a in sorted(ctx.comments(b["id"]), key=lambda a: a.get("date", ""))
                      if (a.get("data", {}).get("card") or {}).get("id") == c["id"]]
+    r["attachments"] = attachments(c)
     if args.json:
         print(json.dumps(r, ensure_ascii=False))
         return
@@ -306,16 +330,63 @@ def cmd_card(cfg: Config, args):
         print(f"\n☑ {cl['name']} ({done}/{len(cl['items'])})")
         for i in cl["items"]:
             print(f"  [{'x' if i['done'] else ' '}] {i['name']}")
+    if r["attachments"]:
+        print(f"\nAttachments ({len(r['attachments'])}):")
+        _print_attachments(r["attachments"], r["card"])
     if r["comments"]:
         print("\nComments:")
         for a in r["comments"]:
             print(f"  {a['date']} {a['author']}: " + a["text"].replace("\n", "\n    "))
 
 
+def cmd_attachment(cfg: Config, args):
+    """List a card's attachments, or download some (files) and print where they are; `--open`
+    opens them in their app (links in the browser)."""
+    ctx = Ctx(cfg, args)
+    c, _ = ctx.find_card(args.card, fetch=args.fetch)
+    rows = attachments(c)
+    if not args.which:
+        if args.json:
+            print(json.dumps(rows, ensure_ascii=False))
+        elif rows:
+            _print_attachments(rows, short(c))
+        else:
+            print("(no attachments)")
+        return
+    want = fold(args.which)
+    hit = rows if want == "all" else [a for a in rows if str(a["n"]) == want or a["id"] == args.which] or \
+        [a for a in rows if fold(a["name"]) == want] or [a for a in rows if want in fold(a["name"])]
+    if not hit or (len(hit) > 1 and want != "all"):
+        _die(f"attachment {args.which!r} on {short(c)}: " + ("; ".join(f"{a['n']}. {a['name']}" for a in hit) if hit
+                                                             else "no match; see `trello attachment " + short(c) + "`"))
+    raw = {a["id"]: a for a in c.get("attachments") or []}
+    out = Path(args.out).expanduser() if args.out else None
+    into = out and (out.is_dir() or args.out.endswith("/") or len(hit) > 1)
+    done = []
+    for a in hit:
+        if a["upload"]:
+            path = ctx.store.download(raw[a["id"]])
+            if out:
+                target = out / path.name if into else out
+                target.parent.mkdir(parents=True, exist_ok=True)
+                path = Path(shutil.copyfile(path, target))
+            a = {**a, "path": str(path), "downloaded": True}
+        done.append(a)
+        if args.open:
+            subprocess.Popen(["xdg-open", a.get("path") or a["url"]], stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True)
+    if args.json:
+        print(json.dumps(done, ensure_ascii=False))
+        return
+    for a in done:
+        print(a.get("path") or a["url"])
+
+
 def _card_text(c: dict, b: dict, comments: list[dict]) -> str:
     parts = [c["name"], c.get("desc", "")]
     parts += [i["name"] for cl in b.get("checklists", []) if cl["idCard"] == c["id"] for i in cl.get("checkItems", [])]
     parts += [a["data"].get("text", "") for a in comments if (a["data"].get("card") or {}).get("id") == c["id"]]
+    parts += [a.get("name") or "" for a in c.get("attachments") or []]
     return fold("\n".join(parts))
 
 
@@ -660,17 +731,26 @@ def add_parsers(sub):
     js(p)
     p.set_defaults(func=cmd_board)
 
-    p = sub.add_parser("card", help="a card: description, checklists, comments")
+    p = sub.add_parser("card", help="a card: description, checklists, attachments, comments")
     p.add_argument("card")
     p.add_argument("--fetch", action="store_true")
     js(p)
     p.set_defaults(func=cmd_card)
 
+    p = sub.add_parser("attachment", help="a card's attachments: list them, or download one and print its path")
+    p.add_argument("card")
+    p.add_argument("which", nargs="?", help="number from the list, part of the name, or all")
+    p.add_argument("--open", action="store_true", help="open it in its app (a link in the browser)")
+    p.add_argument("-o", "--out", metavar="PATH", help="also copy it here (a file, or a folder ending in /)")
+    p.add_argument("--fetch", action="store_true")
+    js(p)
+    p.set_defaults(func=cmd_attachment)
+
     p = sub.add_parser("open", help="show a card or board (link, short link or name) in the client")
     p.add_argument("what")
     p.set_defaults(func=cmd_open)
 
-    p = sub.add_parser("search", help="cards whose name, description, checklists or comments have every word")
+    p = sub.add_parser("search", help="cards whose name, description, checklists, comments or attachment names have every word")
     p.add_argument("query")
     p.add_argument("--all", action="store_true", help="archived cards too")
     p.add_argument("-n", "--limit", type=int, default=40)

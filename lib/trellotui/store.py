@@ -3,7 +3,8 @@
 Boards are kept on disk (in the history database) and painted from there at once;
 three lanes work behind the UI, each strictly in order on its own thread: `fg` sends
 what the user just did, `now` re-reads the board on screen, `bg` syncs the other boards
-(so the board you look at never waits behind them). Every board fetched also goes into
+(so the board you look at never waits behind them), and a fourth, `file`, downloads the
+attachments the user opens. Every board fetched also goes into
 the history, and every write the app makes is recorded the moment Trello confirms it.
 
 Several processes share the cache (the client, the CLI, the timer): each write stamps
@@ -16,13 +17,17 @@ import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from urllib.parse import unquote
 
 from . import restore
 from .api import Trello
-from .config import DATA_DIR, ERROR_LOG, Config
+from .config import CACHE_DIR, DATA_DIR, ERROR_LOG, Config
 from .history import History
 
 DUE_FILE = DATA_DIR / "due"
+ATTACHMENTS = CACHE_DIR / "attachments"
+CACHE = 2       # what a cached board holds; 2: cards carry their attachments
 
 
 def log_error(where: str):
@@ -48,13 +53,29 @@ def count_due(boards: list[dict], me: str) -> int:
     return n
 
 
+def size(n: int | None) -> str:
+    if not n:
+        return ""
+    for unit in ("B", "kB", "MB"):
+        if n < 1000:
+            return f"{n:.0f} {unit}" if unit == "B" or n >= 10 else f"{n:.1f} {unit}"
+        n /= 1000
+    return f"{n:.1f} GB"
+
+
+def attachment_path(a: dict) -> Path:
+    """Where an uploaded attachment is kept: its own folder (names repeat: image.png), its file name."""
+    name = Path(unquote(a.get("fileName") or a.get("name") or "").replace("\0", "")).name
+    return ATTACHMENTS / a["id"] / (name if name.strip(".") else "attachment")
+
+
 class Store:
     def __init__(self, cfg: Config, call_ui, api=None, history=None):
         self.cfg = cfg
         self.call_ui = call_ui
         self.api = api or Trello(cfg.api_key, cfg.token)
         self.history = history or History()
-        self._pools = {lane: ThreadPoolExecutor(1, f"trello-{lane}") for lane in ("fg", "now", "bg")}
+        self._pools = {lane: ThreadPoolExecutor(1, f"trello-{lane}") for lane in ("fg", "now", "bg", "file")}
         self._io = ThreadPoolExecutor(4, "trello-io")    # the requests of one fetch, side by side
         self._lock = threading.Lock()   # inflight / write_gen change on the UI and the fg thread
         self._due_lock = threading.Lock()
@@ -62,6 +83,9 @@ class Store:
         self.inflight = 0          # writes queued or running
         self.write_gen = 0         # bumps when a write finishes
         self.real: dict[str, str] = {}   # tmp id of something just created -> its Trello id
+        if self.history.get("cache", 1) < CACHE:     # copies from an older version: read every board again
+            self.history.forget("seen:")
+            self.history.put("cache", CACHE)
 
     def submit(self, lane: str, fn, done=None, error=None):
         if lane == "fg":
@@ -126,6 +150,20 @@ class Store:
                 self.write_due(board)
                 return board, comments
         return None if check_writes else (board, comments)
+
+    def download(self, a: dict) -> Path:
+        """An uploaded attachment's file, downloaded once (a later call finds it in the cache)."""
+        path = attachment_path(a)
+        if path.exists() and (not a.get("bytes") or path.stat().st_size == a["bytes"]):
+            return path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        part = path.with_name(path.name + ".part")
+        try:
+            self.api.download(a["url"], part)
+            part.replace(path)
+        finally:
+            part.unlink(missing_ok=True)
+        return path
 
     def stale(self, bid: str, activity: str | None = None) -> bool:
         """Is the cached copy of a board older than Trello's (`activity` from the board list) or

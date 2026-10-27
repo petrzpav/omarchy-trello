@@ -58,9 +58,9 @@ actions_items = 3
 | `Shift+← →`, `Shift+↑ ↓` | move the card to the next list / up and down (items too, in a card) |
 | `Ctrl+P` | go to any card or board; `>` for commands |
 | `Ctrl+O` | switch board |
-| `Ctrl+F`, `Esc` | filter cards (name, description, labels, members, checklists, comments) |
+| `Ctrl+F`, `Esc` | filter cards (name, description, labels, members, checklists, comments, attachments) |
 | `Ctrl+N`, `Alt+N` | new card (in a card: new item, then the next one…), new checklist |
-| `F2` / `Enter` | rename / edit what's under the cursor |
+| `F2` / `Enter` | rename / edit what's under the cursor; on an attachment, open it |
 | `Space` | tick an item |
 | `← →` | in a card, on a checklist heading: fold / unfold it |
 | `Alt+C` | hide / show completed checklist items (remembered) |
@@ -75,7 +75,7 @@ actions_items = 3
 | `Ctrl+Z` | undo |
 | `Alt+H`, `Alt+R` | history, recently deleted |
 | `Alt+O` | open in the browser |
-| `Ctrl+C` | copy what's under the cursor: card name, item, description, comment… |
+| `Ctrl+C` | copy what's under the cursor: card name, item, description, comment, attachment link… |
 | `Alt+Y` | copy the link of the card (or the board) |
 | `Alt+A` | my actions: “action” cards I'm on, from every board |
 | `F5`, `F1`, `Ctrl+Q` | refresh, help, quit |
@@ -84,11 +84,13 @@ Every key can be changed in `~/.config/petrzpav-trello/config.toml` under `[keys
 
 ## Scripting and Claude Code
 
-`trello boards`, `board BOARD`, `card CARD`, `mine`, `actions`, `search 'words'`, `add`, `update`
+`trello boards`, `board BOARD`, `card CARD`, `attachment CARD [N]`, `mine`, `actions`, `search 'words'`, `add`, `update`
 (move, due, labels, archive), `comment`, `item`, `check`, `history`, `deleted` and `restore SEQ`
 work without the client and record every write in the history. They read the local copy after
 one quick check against Trello, which re-reads only the boards that changed (`--cached` skips it,
 for offline use). A card is its short link, URL or part of its name. Lists take `--json`; see `trello -h`.
+`trello attachment CARD N` downloads an attached file to `~/.cache/petrzpav-trello/attachments` and
+prints its path, so a script or an agent can read it; `--open` opens it, `-o DIR/` copies it there.
 
 To let Claude Code manage your cards with the same commands, run `install.sh --skill`: it links
 `skill/` into `~/.claude/skills/trello`, so Claude knows them in every project. Plain `install.sh`

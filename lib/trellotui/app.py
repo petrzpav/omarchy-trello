@@ -31,7 +31,7 @@ from textual.widgets.option_list import Option
 
 from .config import Config
 from .history import Version
-from .store import Store, log_error
+from .store import Store, attachment_path, log_error, size
 
 SYNC_AFTER_WRITE = 1.5    # seconds of quiet after a write before re-reading the board
 FULL_SYNC = 600           # re-read a board fully at least this often, even if Trello says nothing changed
@@ -177,6 +177,7 @@ class Model:
             parts.append(cl["name"])
             parts += [i["name"] for i in cl.get("checkItems", [])]
         parts += [a["data"].get("text", "") for a in self.card_comments(c["id"])]
+        parts += [a.get("name") or "" for a in c.get("attachments") or []]
         return fold("\n".join(parts))
 
 
@@ -622,6 +623,8 @@ class BoardScreen(Screen):
         n = len(m.card_comments(c["id"]))
         if n:
             badges.append(f"󰆉 {n} ", style="dim")
+        if c.get("attachments"):
+            badges.append(f"\U000f0066 {len(c['attachments'])} ", style="dim")
         if c.get("desc"):
             badges.append("≡ ", style="dim")
         mem = [m.members[x].get("initials", "?") for x in c.get("idMembers", []) if x in m.members]
@@ -882,9 +885,9 @@ class BoardScreen(Screen):
 # ------------------------------------------------------------ card
 
 class CardScreen(Screen):
-    """One card as a page: title, details, description, checklists, comments.
-    ↑↓ walk the rows; Enter edits the row; Space ticks an item; ←→ on a checklist heading
-    fold / unfold it."""
+    """One card as a page: title, details, description, attachments, checklists, comments.
+    ↑↓ walk the rows; Enter edits the row (opens an attachment); Space ticks an item; ←→ on a
+    checklist heading fold / unfold it."""
 
     def __init__(self, card_id: str):
         super().__init__()
@@ -959,6 +962,18 @@ class CardScreen(Screen):
         opts += [Option(meta, id="meta"), None]
         desc = c.get("desc") or ""
         opts.append(Option(Md(desc) if desc else Text("Add a description… (Enter)", style="dim italic"), id="desc"))
+        atts = self.attachments()
+        if atts:
+            opts.append(Option(Text(f"\nAttachments  {len(atts)}", style="bold"), id="attachments", disabled=True))
+        for a in atts:
+            name = a.get("name") or a.get("url") or "?"
+            body = Text(name)
+            if a.get("isUpload"):
+                body.append(f"  {size(a.get('bytes'))}  {short_date(parse_time(a.get('date')))}", style="dim")
+            elif a.get("url") and a["url"] != name:
+                body.append(f"  {a['url']}", style="dim")
+            opts.append(Option(hanging(Text("\U000f0066 " if a.get("isUpload") else "\U000f0337 ", style="dim"), body),
+                               id=f"at:{a['id']}"))
         hide = app.store.history.get("hide_done", False)
         self._bindings.bind(app.keys["hide_done"], "app.hide_done", "Show done" if hide else "Hide done")
         self.refresh_bindings()
@@ -1012,6 +1027,8 @@ class CardScreen(Screen):
             return (it or cl or {}).get("name", "")
         if r.startswith("cm:"):
             return (self.comment_at() or {"data": {}})["data"].get("text", "")
+        if r.startswith("at:"):
+            return (self.attachment_at() or {}).get("url", "")
         return prompt_text(self.query_one("#rows", OptionList))       # the details row
 
     def where(self):
@@ -1030,6 +1047,15 @@ class CardScreen(Screen):
         r = self.row()
         if r.startswith("cm:"):
             return next((a for a in self.app.model.card_comments(self.card_id) if a["id"] == r[3:]), None)
+        return None
+
+    def attachments(self) -> list[dict]:
+        return sorted((self.card or {}).get("attachments") or [], key=lambda a: a.get("date") or "")
+
+    def attachment_at(self):
+        r = self.row()
+        if r.startswith("at:"):
+            return next((a for a in self.attachments() if a["id"] == r[3:]), None)
         return None
 
     @on(OptionList.OptionSelected)
@@ -1066,7 +1092,9 @@ class CardScreen(Screen):
             return
         r = self.row()
         cl, it = self.where()
-        if r == "title":
+        if (a := self.attachment_at()):
+            app.open_attachment(a)
+        elif r == "title":
             app.rename_card(c)
         elif r == "meta":
             app.due_dialog(c)
@@ -1869,6 +1897,16 @@ class TrelloApp(App):
             subprocess.Popen(["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                              start_new_session=True)
 
+    def open_attachment(self, a: dict):
+        """A link in the browser; a file downloaded (once, on the `file` lane) and opened in its app."""
+        if not a.get("isUpload"):
+            return self.open_url(a.get("url"))
+        name = a.get("name") or "attachment"
+        if not attachment_path(a).exists():
+            self.notify(f"Downloading “{name}”…", timeout=3)
+        self.store.submit("file", lambda: self.store.download(a), lambda path: self.open_url(str(path)),
+                          lambda e: self.notify(f"Can't open “{name}”: {e}", severity="error", timeout=8))
+
     def action_actions(self):
         if isinstance(self.screen, ModalScreen):
             return
@@ -2172,7 +2210,7 @@ class TrelloApp(App):
             (k["actions"], "my actions: “action” cards I'm on, from every board"),
             "Cards",
             (k["new"], "new card (in a card: new checklist item)"),
-            (f"{k['rename']} / Enter", "rename / edit what's under the cursor"),
+            (f"{k['rename']} / Enter", "rename / edit what's under the cursor · open an attachment"),
             ("Shift+← →  Shift+↑ ↓", "move the card to the next list · up / down (items too)"),
             (k["move"], "move to another list (also on another board)"),
             (k["labels"], "labels: Enter toggles one"),

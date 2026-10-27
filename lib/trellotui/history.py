@@ -124,6 +124,11 @@ class History:
         with self.lock:
             self.db.execute("INSERT OR REPLACE INTO kv VALUES(?,?)", (k, json.dumps(v, ensure_ascii=False)))
 
+    def forget(self, prefix: str):
+        """Drop every key starting with `prefix`."""
+        with self.lock:
+            self.db.execute("DELETE FROM kv WHERE substr(k, 1, ?) = ?", (len(prefix), prefix))
+
     # -- recording
 
     def _write(self, rows, ts, source):
