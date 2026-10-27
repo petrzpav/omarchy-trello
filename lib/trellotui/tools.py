@@ -22,7 +22,7 @@ from pathlib import Path
 
 from .config import Config
 from .history import Version
-from .store import Store, attachment_path, size
+from .store import Store, attachment_path, open_external, size
 
 
 def fold(s: str) -> str:
@@ -373,8 +373,7 @@ def cmd_attachment(cfg: Config, args):
             a = {**a, "path": str(path), "downloaded": True}
         done.append(a)
         if args.open:
-            subprocess.Popen(["xdg-open", a.get("path") or a["url"]], stdout=subprocess.DEVNULL,
-                             stderr=subprocess.DEVNULL, start_new_session=True)
+            open_external(a.get("path") or a["url"])
     if args.json:
         print(json.dumps(done, ensure_ascii=False))
         return

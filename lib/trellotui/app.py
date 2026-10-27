@@ -31,7 +31,7 @@ from textual.widgets.option_list import Option
 
 from .config import Config
 from .history import Version
-from .store import Store, attachment_path, log_error, size
+from .store import Store, attachment_path, log_error, open_external, size
 
 SYNC_AFTER_WRITE = 1.5    # seconds of quiet after a write before re-reading the board
 FULL_SYNC = 600           # re-read a board fully at least this often, even if Trello says nothing changed
@@ -1894,8 +1894,7 @@ class TrelloApp(App):
 
     def open_url(self, url):
         if url:
-            subprocess.Popen(["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                             start_new_session=True)
+            open_external(url)
 
     def open_attachment(self, a: dict):
         """A link in the browser; a file downloaded (once, on the `file` lane) and opened in its app."""

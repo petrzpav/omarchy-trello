@@ -12,6 +12,8 @@ its board (`wrote:`), and a fetch that began before a newer write or a newer fet
 thrown away instead of overwriting the cache with something older (History.save_board).
 """
 
+import shutil
+import subprocess
 import threading
 import time
 import traceback
@@ -67,6 +69,15 @@ def attachment_path(a: dict) -> Path:
     """Where an uploaded attachment is kept: its own folder (names repeat: image.png), its file name."""
     name = Path(unquote(a.get("fileName") or a.get("name") or "").replace("\0", "")).name
     return ATTACHMENTS / a["id"] / (name if name.strip(".") else "attachment")
+
+
+def open_external(target: str):
+    """A file or a link in its default app, detached from our terminal. `xdg-open` runs a
+    terminal app (nvim for a .txt) inside the terminal it was called from, on top of the
+    client; `gio open` gives it a terminal window of its own."""
+    cmd = ["gio", "open", target] if shutil.which("gio") else ["xdg-open", target]
+    subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     start_new_session=True)
 
 
 class Store:
