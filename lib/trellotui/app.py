@@ -905,6 +905,7 @@ class CardScreen(Screen):
         for key, action, desc, show in [
             ("escape", "back", "Back", True), ("space", "toggle", "Tick", True),
             ("shift+up", "shift_row(-1)", "", False), ("shift+down", "shift_row(1)", "", False),
+            ("ctrl+shift+up", "shift_checklist(-1)", "", False), ("ctrl+shift+down", "shift_checklist(1)", "", False),
             ("left", "fold(True)", "", False), ("right", "fold(False)", "", False),
             (k["new"], "new_item", "New item", True), (k["new_checklist"], "new_checklist", "New checklist", False),
             (k["rename"], "edit", "Edit", False), (k["comment"], "comment", "Comment", False),
@@ -1106,7 +1107,7 @@ class CardScreen(Screen):
                             lambda t: t and t.strip() and t != it["name"] and app.set_item(c, cl, it, name=t.strip()))
         elif cl:
             app.push_screen(Prompt("Checklist", cl["name"]),
-                            lambda t: t and t.strip() and app.rename_checklist(c, cl, t.strip()))
+                            lambda t: t and t.strip() and app.set_checklist(c, cl, name=t.strip()))
         elif (a := self.comment_at()):
             if a.get("idMemberCreator") != app.me_id:
                 return app.notify("You can only edit your own comments", severity="warning")
@@ -1167,6 +1168,20 @@ class CardScreen(Screen):
         others = [x for x in items if x is not it]
         pos = between(others[j - 1]["pos"] if j > 0 else None, others[j]["pos"] if j < len(others) else None)
         self.app.set_item(c, cl, it, pos=pos)
+
+    def action_shift_checklist(self, d: int):
+        """The checklist under the cursor (its heading or one of its items) up or down."""
+        c = self.card
+        cl, _ = self.where()
+        if not (c and cl and self.row().startswith(("cl:", "it:"))):
+            return
+        cls = self.app.model.checklists(c["id"])
+        j = cls.index(cl) + d
+        if not 0 <= j < len(cls):
+            return
+        others = [x for x in cls if x is not cl]
+        pos = between(others[j - 1]["pos"] if j > 0 else None, others[j]["pos"] if j < len(others) else None)
+        self.app.set_checklist(c, cl, pos=pos)
 
     def action_delete(self):
         app: TrelloApp = self.app
@@ -2211,6 +2226,7 @@ class TrelloApp(App):
             (k["new"], "new card (in a card: new checklist item)"),
             (f"{k['rename']} / Enter", "rename / edit what's under the cursor · open an attachment"),
             ("Shift+← →  Shift+↑ ↓", "move the card to the next list · up / down (items too)"),
+            ("Ctrl+Shift+↑ ↓", "in a card: move the checklist up / down"),
             (k["move"], "move to another list (also on another board)"),
             (k["labels"], "labels: Enter toggles one"),
             (k["members"], "members: Enter adds / removes one"),
@@ -2486,17 +2502,20 @@ class TrelloApp(App):
         self.push_undo(f"added checklist “{name}”", lambda: self.delete_checklist(c, cl, undo=False))
         return cl
 
-    def rename_checklist(self, c, cl, name, undo=True):
+    def set_checklist(self, c, cl, undo=True, **fields):
         c = self.live_card(c)
         cl = self.live_checklist(c, cl)
-        old = cl["name"]
-        cl["name"] = name
+        old = {k: cl.get(k) for k in fields}
+        cl.update(fields)
+        if "pos" in fields:
+            self.model_for(self.board_of(c)).checklists(c["id"]).sort(key=lambda x: x.get("pos") or 0)
         self.repaint()
         bid = self.board_of(c)
-        self.write(lambda: self.store.rec("checklist", self.store.api.update_checklist(self.R(cl), name=name),
-                                          bid, self.R(c)), "Renaming the checklist", bid)
+        self.write(lambda: self.store.rec("checklist", self.store.api.update_checklist(self.R(cl), **fields),
+                                          bid, self.R(c)), "Saving the checklist", bid)
         if undo:
-            self.push_undo("renamed checklist", lambda: self.rename_checklist(c, cl, old, undo=False))
+            self.push_undo("moved checklist" if "pos" in fields else "renamed checklist",
+                           lambda: self.set_checklist(c, cl, undo=False, **old))
 
     def delete_checklist(self, c, cl, undo=True):
         c = self.live_card(c)

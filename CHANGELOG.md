@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 - A card shows its attachments, with a 󰁦 count on the board; `Enter` on one opens it (a file is downloaded once, a link opens in the browser).
 - `trello card` lists the card's attachments, and `trello attachment CARD N` downloads one and prints its path, so scripts and Claude Code can read it; `--open` opens it.
 - Search and the filter also find cards by the names of their attachments.
+- `Ctrl+Shift+↑ ↓` in a card moves the checklist under the cursor up and down.
 
 ## [0.3.0] - 2026-10-20
 

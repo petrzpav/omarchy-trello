@@ -56,6 +56,7 @@ actions_items = 3
 |---|---|
 | `← → ↑ ↓`, `Enter` | move between lists and cards, open a card |
 | `Shift+← →`, `Shift+↑ ↓` | move the card to the next list / up and down (items too, in a card) |
+| `Ctrl+Shift+↑ ↓` | in a card, move the checklist under the cursor up and down |
 | `Ctrl+P` | go to any card or board; `>` for commands |
 | `Ctrl+O` | switch board |
 | `Ctrl+F`, `Esc` | filter cards (name, description, labels, members, checklists, comments, attachments) |
